@@ -3,72 +3,190 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ABC Detection</title>
-    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <title>Red Color Detection</title>
     <style>
-      body { margin: 0; background: #000; color: white; text-align: center; font-family: sans-serif; }
-      #video { width: 100vw; height: 60vh; object-fit: cover; }
-      #result { font-size: 2rem; font-weight: bold; color: #00ffcc; margin-top: 10px; min-height: 2.5rem; }
-      #status { font-size: 0.8rem; color: #aaa; padding: 10px; }
+      body { margin: 0; background: #000; overflow: hidden; font-family: sans-serif; }
+      #container { position: relative; width: 100vw; height: 100vh; }
+      
+      /* 元のカメラ映像（背面レイヤー） */
+      #video {
+        position: absolute; top: 0; left: 0;
+        width: 100%; height: 100%;
+        object-fit: cover; /* 画面いっぱいに表示 */
+      }
+      
+      /* マークを描画するキャンバス（前面レイヤー） */
+      #overlay {
+        position: absolute; top: 0; left: 0;
+        width: 100%; height: 100%;
+        pointer-events: none; /* タッチイベントを透過 */
+      }
+      
+      #status {
+        position: absolute; top: 10px; left: 10px;
+        background: rgba(0,0,0,0.7); color: white;
+        padding: 5px 10px; border-radius: 5px; font-size: 0.8rem;
+        z-index: 10;
+      }
     </style>
   </head>
   <body>
-    <!-- カメラ映像 -->
-    <video id="video" autoplay playsinline muted></video>
-    
-    <!-- 検出結果を表示する場所 -->
-    <div id="result"></div>
-    <div id="status">カメラとライブラリを準備中...</div>
+    <div id="container">
+      <div id="status">カメラ準備中...</div>
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+    </div>
 
-    <canvas id="canvas" style="display: none;"></canvas>
+    <!-- 処理用の非表示キャンバス -->
+    <canvas id="processingCanvas" style="display:none;"></canvas>
 
     <script>
       const video = document.getElementById('video');
-      const canvas = document.getElementById('canvas');
-      const resultDiv = document.getElementById('result');
+      const overlay = document.getElementById('overlay');
       const statusDiv = document.getElementById('status');
-      let worker = null;
+      const procCanvas = document.getElementById('processingCanvas');
+      
+      let overlayCtx, procCtx;
+      let isProcessing = false;
 
-      // 初期化処理
-      async function init() {
+      // 1. スマホの背面カメラを起動
+      async function initCamera() {
         try {
-          // 1. カメラの起動
-          const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: 'environment', // 背面カメラ
+              width: { ideal: 640 }, // 処理速度向上のため解像度を抑える
+              height: { ideal: 480 }
+            }
+          });
           video.srcObject = stream;
-          statusDiv.innerText = 'カメラ接続完了。OCRライブラリを読み込み中...';
-
-          // 2. Tesseractの準備
-          worker = await Tesseract.createWorker('eng');
-          statusDiv.innerText = '準備完了！「ABC」の文字をカメラにかざしてください。';
-
-          // 3. 定期的に解析
-          setInterval(detect, 2000);
+          
+          // ビデオの読み込み完了を待ってからキャンバスを設定
+          video.onloadedmetadata = () => {
+            setupCanvases();
+            statusDiv.innerText = '赤いモノを探しています...';
+            requestAnimationFrame(processFrame); // ループ処理開始
+          };
         } catch (err) {
-          statusDiv.innerText = 'エラーが発生しました: ' + err.message;
+          statusDiv.innerText = 'エラー: ' + err.message;
+          console.error(err);
         }
       }
 
-      // 文字認識処理
-      async function detect() {
-        if (!worker || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+      // 2. キャンバスのサイズ設定
+      function setupCanvases() {
+        // 表示用オーバーレイ（画面サイズ）
+        overlay.width = window.innerWidth;
+        overlay.height = window.innerHeight;
+        overlayCtx = overlay.getContext('2d');
 
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        // 処理用（ビデオの解像度サイズ）
+        procCanvas.width = video.videoWidth;
+        procCanvas.height = video.videoHeight;
+        procCtx = procCanvas.getContext('2d');
+      }
 
-        const { data: { text } } = await worker.recognize(canvas);
+      // 3. 毎フレームの処理ループ
+      function processFrame() {
+        if (!procCtx || video.paused || video.ended) {
+          requestAnimationFrame(processFrame);
+          return;
+        }
+
+        // 3-1. ビデオ映像を処理用キャンバスに描画
+        procCtx.drawImage(video, 0, 0, procCanvas.width, procCanvas.height);
         
-        statusDiv.innerText = `読み取り結果: "${text.trim().replace(/\n/g, ' ')}"`;
+        // 3-2. 全画素のRGBAデータを取得
+        const imageData = procCtx.getImageData(0, 0, procCanvas.width, procCanvas.height);
+        const data = imageData.data; // [r, g, b, a, r, g, b, a, ...] という配列
 
-        if (text.toUpperCase().includes('ABC')) {
-          resultDiv.innerText = 'Hello World!';
+        let redPixels = []; // 赤い画素の座標を貯める配列
+
+        // 3-3. 画素を走査して「赤さ」を判定（速度優先で数画素おきに間引く）
+        const step = 4; // 4画素ごとにチェック
+        for (let y = 0; y < procCanvas.height; y += step) {
+          for (let x = 0; x < procCanvas.width; x += step) {
+            const index = (y * procCanvas.width + x) * 4;
+            const r = data[index];     // 赤成分
+            const g = data[index + 1]; // 緑成分
+            const b = data[index + 2]; // 青成分
+
+            // --- ★ここが「赤色判定」の肝 ---
+            // 簡単な判定基準: 「赤が緑より十分強く、青より十分強い」
+            if (r > 100 && r > g * 1.5 && r > b * 1.5) {
+              redPixels.push({ x, y });
+            }
+          }
+        }
+
+        // 3-4. 画面上にマークを描画
+        drawMarkers(redPixels);
+
+        // 次のフレームへ
+        requestAnimationFrame(processFrame);
+      }
+
+      // 4. 赤い部分にマーク（枠）を描画
+      function drawMarkers(pixels) {
+        // 前のフレームの描画をクリア
+        overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+        
+        if (pixels.length === 0) return;
+
+        // 4-1. 赤い画素が集まっている範囲（バウンディングボックス）を計算
+        let minX = procCanvas.width, maxX = 0, minY = procCanvas.height, maxY = 0;
+        for (let p of pixels) {
+          if (p.x < minX) minX = p.x;
+          if (p.x > maxX) maxX = p.x;
+          if (p.y < minY) minY = p.y;
+          if (p.y > maxY) maxY = p.y;
+        }
+
+        // 4-2. 処理座標系（ビデオ）から表示座標系（画面）へ変換
+        const scaleX = overlay.width / procCanvas.width;
+        const scaleY = overlay.height / procCanvas.height;
+
+        // カメラ映像が object-fit: cover なので、中央合わせの計算が必要
+        const videoRatio = procCanvas.width / procCanvas.height;
+        const screenRatio = overlay.width / overlay.height;
+        
+        let finalScale, offsetX = 0, offsetY = 0;
+        if (videoRatio > screenRatio) {
+          // ビデオの方が横長（上下に黒帯ができる状態をcoverにする）
+          finalScale = overlay.height / procCanvas.height;
+          offsetX = (overlay.width - procCanvas.width * finalScale) / 2;
         } else {
-          resultDiv.innerText = '';
+          // ビデオの方が縦長（左右に黒帯ができる状態をcoverにする）
+          finalScale = overlay.width / procCanvas.width;
+          offsetY = (overlay.height - procCanvas.height * finalScale) / 2;
+        }
+
+        // 座標変換
+        const screenMinX = minX * finalScale + offsetX;
+        const screenMaxX = maxX * finalScale + offsetX;
+        const screenMinY = minY * finalScale + offsetY;
+        const screenMaxY = maxY * finalScale + offsetY;
+        const width = screenMaxX - screenMinX;
+        const height = screenMaxY - screenMinY;
+
+        // 4-3. 枠を描画
+        if (pixels.length > 50) { // ある程度の大きさの塊だけマークする
+          overlayCtx.strokeStyle = '#ff0000'; // 赤い枠
+          overlayCtx.lineWidth = 4;
+          overlayCtx.strokeRect(screenMinX, screenMinY, width, height);
+
+          // ラベル描画
+          overlayCtx.fillStyle = '#ff0000';
+          overlayCtx.font = 'bold 20px sans-serif';
+          overlayCtx.fillText('RED OBJECT', screenMinX, screenMinY - 10);
         }
       }
 
-      init();
+      // 画面サイズ変更時にキャンバスを再設定
+      window.addEventListener('resize', setupCanvases);
+
+      // 起動
+      initCamera();
     </script>
   </body>
 </html>
