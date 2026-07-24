@@ -3,29 +3,86 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebAR Hello World</title>
-    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+    <title>ABC OCR Hello World</title>
+    <!-- OCRライブラリ (Tesseract.js) の読み込み -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <style>
+      body { margin: 0; background: #000; font-family: sans-serif; text-align: center; color: white; }
+      #video { width: 100vw; height: 100vh; object-fit: cover; position: absolute; left: 0; top: 0; }
+      #overlay {
+        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+        display: flex; flex-direction: column; justify-content: center; align-items: center;
+        pointer-events: none;
+      }
+      #result {
+        font-size: 3rem; font-weight: bold; color: #00ffcc;
+        text-shadow: 0 0 10px #000, 0 0 20px #000;
+        background: rgba(0,0,0,0.6); padding: 10px 20px; border-radius: 10px;
+      }
+      #status { position: absolute; top: 10px; left: 10px; font-size: 0.9rem; background: rgba(0,0,0,0.5); padding: 5px; }
+    </style>
   </head>
-  <body style="margin: 0; overflow: hidden;">
-    <a-scene 
-      mindar-image="imageTargetSrc: https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/examples/image-tracking/assets/card-example/card.mind;" 
-      color-space="sRGB" 
-      renderer="colorManagement: true, physicallyCorrectLights" 
-      vr-mode-ui="enabled: false" 
-      device-orientation-permission-ui="enabled: false">
-      
-      <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+  <body>
+    <!-- カメラ映像表示 -->
+    <video id="video" autoplay playsinline muted></video>
+    
+    <!-- 画面上のオーバーレイ表示 -->
+    <div id="overlay">
+      <div id="status">カメラ起動中...</div>
+      <div id="result"></div>
+    </div>
 
-      <a-entity mindar-image-target="targetIndex: 0">
-        <a-text 
-          value="Hello World!" 
-          position="0 0 0" 
-          align="center" 
-          color="#4CC3D9" 
-          scale="1.5 1.5 1.5">
-        </a-text>
-      </a-entity>
-    </a-scene>
+    <!-- 非表示のキャンバス（画像解析用） -->
+    <canvas id="canvas" style="display: none;"></canvas>
+
+    <script>
+      const video = document.getElementById('video');
+      const canvas = document.getElementById('canvas');
+      const resultDiv = document.getElementById('result');
+      const statusDiv = document.getElementById('status');
+      let isAnalyzing = false;
+
+      // 1. スマホの背面カメラを起動
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+        .then(stream => {
+          video.srcObject = stream;
+          statusDiv.innerText = '「ABC」の文字を探しています...';
+          // 1.5秒ごとに文字解析を実行
+          setInterval(detectText, 1500);
+        })
+        .catch(err => {
+          statusDiv.innerText = 'カメラの起動に失敗しました: ' + err;
+        });
+
+      // 2. カメラ映像から文字（ABC）を検出する処理
+      async function detectText() {
+        if (isAnalyzing || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+        isAnalyzing = true;
+
+        // 映像フレームをcanvasに描画
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        try {
+          // Tesseract.jsで英語テキストの認識を実行
+          const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
+          
+          statusDiv.innerText = `認識されたテキスト: "${text.trim().replace(/\n/g, ' ')}"`;
+
+          // 認識した文字列に「ABC」が含まれているか判定
+          if (text.toUpperCase().includes('ABC')) {
+            resultDiv.innerText = 'Hello World!';
+          } else {
+            resultDiv.innerText = '';
+          }
+        } catch (e) {
+          console.error(e);
+        }
+
+        isAnalyzing = false;
+      }
+    </script>
   </body>
 </html>
