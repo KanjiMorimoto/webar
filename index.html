@@ -6,52 +6,58 @@
   <title>AR物理実験室 - 点電荷</title>
   
   <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
-  <!-- AR.jsは最新のマスターブランチを利用 -->
   <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
 
   <script>
-    // 【改善点③】Three.jsを用いた線形補間(Lerp)コンポーネント
-    // マーカーの生データを直接使わず、目標座標に向けて滑らかに移動・回転させる
+    // マーカー追従用のスムージングコンポーネント
     AFRAME.registerComponent('smooth-follower', {
       schema: {
         target: {type: 'selector'},
-        lerpAmount: {type: 'number', default: 0.1} // 追従スピード（小さいほど滑らか）
+        lerpAmount: {type: 'number', default: 0.15}
       },
       init: function() {
         this.targetWorldPos = new THREE.Vector3();
         this.targetWorldQuat = new THREE.Quaternion();
-        // 初期状態は非表示
         this.el.object3D.visible = false;
       },
       tick: function () {
         if (!this.data.target) return;
         const targetEl = this.data.target;
 
-        // マーカーが認識されている場合のみ追従・表示
         if (targetEl.object3D.visible) {
           this.el.object3D.visible = true;
-
-          // マーカーのワールド座標と回転を取得
           targetEl.object3D.getWorldPosition(this.targetWorldPos);
           targetEl.object3D.getWorldQuaternion(this.targetWorldQuat);
-
-          // 現在位置から目標位置へ線形補間 (Lerp)
           this.el.object3D.position.lerp(this.targetWorldPos, this.data.lerpAmount);
-          // 現在の回転から目標の回転へ球面線形補間 (Slerp)
           this.el.object3D.quaternion.slerp(this.targetWorldQuat, this.data.lerpAmount);
         } else {
-          // マーカーを見失ったら非表示にする
           this.el.object3D.visible = false;
         }
       }
     });
 
-    // 1. 点電荷 (ウニ状・距離の2乗に反比例)
+    // 点電荷コンポーネント (動的更新に対応)
     AFRAME.registerComponent('point-charge-field', {
+      schema: {
+        charge: {type: 'number', default: 1.0} // 電気量の大きさと符号
+      },
       init: function () {
-        const scene3D = this.el.object3D;
+        // 矢印をまとめるグループを作成
+        this.arrowGroup = new THREE.Group();
+        this.el.object3D.add(this.arrowGroup);
+      },
+      update: function () {
+        // 古い矢印をクリア
+        while (this.arrowGroup.children.length > 0) {
+          this.arrowGroup.remove(this.arrowGroup.children[0]);
+        }
+
+        const chargeValue = this.data.charge;
+        if (chargeValue === 0) return; // 電荷0の場合は描画しない
+
         const chargePos = new THREE.Vector3(0, 1.0, 0);
-        const coulombK = 1.0;
+        const coulombK = Math.abs(chargeValue); // 大きさ
+        const sign = Math.sign(chargeValue);    // 符号 (正なら1, 負なら-1)
 
         const rMin = 0.5, rMax = 2.0, rSteps = 3;
         const thetaSteps = 6, phiSteps = 12;  
@@ -75,45 +81,81 @@
               const distance = direction.length();
               direction.normalize();
               
+              // 負電荷の場合はベクトルの向きを逆にする
+              if (sign < 0) direction.negate();
+
               const magnitude = coulombK / (distance * distance);
               const arrowLength = Math.min(magnitude * 0.5, 0.4);
+              // 電荷量が大きいほど色も濃くなるように調整
               const colorIntensity = Math.min(magnitude, 1.0);
               const color = new THREE.Color().setHSL((1.0 - colorIntensity) * 0.66, 1.0, 0.5);
 
-              scene3D.add(new THREE.ArrowHelper(direction, targetPos, arrowLength, color.getHex(), arrowLength * 0.3, arrowLength * 0.3));
+              const arrow = new THREE.ArrowHelper(direction, targetPos, arrowLength, color.getHex(), arrowLength * 0.3, arrowLength * 0.3);
+              this.arrowGroup.add(arrow);
             }
           }
         }
       }
     });
+
+    // UI(スライダー)とA-Frameの連動処理
+    document.addEventListener('DOMContentLoaded', () => {
+      const slider = document.getElementById('charge-slider');
+      const label = document.getElementById('charge-value-label');
+      const fieldEntity = document.getElementById('electric-field');
+      const sphereEntity = document.getElementById('charge-sphere');
+
+      slider.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        
+        // ラベルの更新
+        label.textContent = val.toFixed(1);
+
+        // 電場ベクトルの更新
+        fieldEntity.setAttribute('point-charge-field', 'charge', val);
+
+        // 中心球の色の更新 (正電荷: 赤系, 負電荷: 青系, 0: グレー)
+        if (val > 0) {
+          sphereEntity.setAttribute('color', '#FF3333');
+        } else if (val < 0) {
+          sphereEntity.setAttribute('color', '#3333FF');
+        } else {
+          sphereEntity.setAttribute('color', '#888888');
+        }
+      });
+    });
   </script>
 </head>
 <body style="margin: 0; overflow: hidden; background-color: #000;">
   
-  <!-- UIラベル (操作不要のためボタンからラベルに変更) -->
+  <!-- タイトルラベル -->
   <div style="position: absolute; top: 20px; width: 100%; display: flex; justify-content: center; z-index: 10; pointer-events: none;">
-    <div style="padding: 10px 20px; font-size: 16px; font-weight: bold; background-color: rgba(255, 68, 68, 0.8); color: white; border: 2px solid white; border-radius: 8px;">
+    <div style="padding: 10px 20px; font-size: 16px; font-weight: bold; background-color: rgba(0, 0, 0, 0.7); color: white; border: 1px solid white; border-radius: 8px;">
       点電荷の電場
     </div>
   </div>
 
+  <!-- スライダーUI -->
+  <div style="position: absolute; bottom: 30px; width: 100%; display: flex; flex-direction: column; align-items: center; z-index: 10;">
+    <div style="color: white; font-size: 18px; font-weight: bold; margin-bottom: 10px; text-shadow: 1px 1px 3px black;">
+      電気量: <span id="charge-value-label">1.0</span>
+    </div>
+    <!-- min, maxでマイナスからプラスまで変化できるように設定 -->
+    <input type="range" id="charge-slider" min="-3.0" max="3.0" step="0.1" value="1.0" style="width: 70%; max-width: 400px; height: 30px;">
+  </div>
+
   <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false; trackingMethod: best; detectionMode: mono_and_matrix; matrixCodeType: 3x3;">
     
-    <!-- AR.js内部のスムージングを有効化したマーカー -->
-    <a-marker id="marker-0" type="barcode" value="0" smooth="true" smoothCount="10" smoothTolerance="0.01" smoothThreshold="5">
-      <!-- ※マーカーの中には直接3Dモデルを入れない（入れ落ち防止・Lerp追従のため） -->
-    </a-marker>
+    <a-marker id="marker-0" type="barcode" value="0" smooth="true" smoothCount="10" smoothTolerance="0.01" smoothThreshold="5"></a-marker>
 
     <a-entity camera></a-entity>
 
-    <!-- id="marker-0"の座標を滑らかに追いかけるコンテナ -->
     <a-entity id="physics-container" smooth-follower="target: #marker-0; lerpAmount: 0.15">
-      
-      <!-- 点電荷のモデルと電場ベクトル -->
-      <a-sphere position="0 1.0 0" radius="0.1" color="#FF3333" opacity="0.9"></a-sphere>
-      <a-entity point-charge-field></a-entity>
-
+      <!-- スクリプトから操作できるように id を付与 -->
+      <a-sphere id="charge-sphere" position="0 1.0 0" radius="0.1" color="#FF3333" opacity="0.9"></a-sphere>
+      <a-entity id="electric-field" point-charge-field="charge: 1.0"></a-entity>
     </a-entity>
+
   </a-scene>
 </body>
 </html>
