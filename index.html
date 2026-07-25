@@ -1,192 +1,35 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html>
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Red Color Detection</title>
-    <style>
-      body { margin: 0; background: #000; overflow: hidden; font-family: sans-serif; }
-      #container { position: relative; width: 100vw; height: 100vh; }
-      
-      /* 元のカメラ映像（背面レイヤー） */
-      #video {
-        position: absolute; top: 0; left: 0;
-        width: 100%; height: 100%;
-        object-fit: cover; /* 画面いっぱいに表示 */
-      }
-      
-      /* マークを描画するキャンバス（前面レイヤー） */
-      #overlay {
-        position: absolute; top: 0; left: 0;
-        width: 100%; height: 100%;
-        pointer-events: none; /* タッチイベントを透過 */
-      }
-      
-      #status {
-        position: absolute; top: 10px; left: 10px;
-        background: rgba(0,0,0,0.7); color: white;
-        padding: 5px 10px; border-radius: 5px; font-size: 0.8rem;
-        z-index: 10;
-      }
-    </style>
+    <meta charset="utf-8" />
+    <title>AR物理実験室 - マルチマーカー版</title>
+    <!-- A-Frame と AR.js を読み込み -->
+    <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
+    <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
   </head>
-  <body>
-    <div id="container">
-      <div id="status">カメラ準備中...</div>
-      <video id="video" autoplay playsinline muted></video>
-      <canvas id="overlay"></canvas>
-    </div>
 
-    <!-- 処理用の非表示キャンバス -->
-    <canvas id="processingCanvas" style="display:none;"></canvas>
+  <body style="margin: 0; overflow: hidden;">
+    <!-- ARシーンの構築：バーコードマーカー（3x3）を認識する設定に変更 -->
+    <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3;">
 
-    <script>
-      const video = document.getElementById('video');
-      const overlay = document.getElementById('overlay');
-      const statusDiv = document.getElementById('status');
-      const procCanvas = document.getElementById('processingCanvas');
-      
-      let overlayCtx, procCtx;
-      let isProcessing = false;
+      <!-- ID:0 のマーカー（＋電荷用） -->
+      <a-marker type="barcode" value="0" id="marker-plus">
+        <a-sphere radius="0.3" color="#FF0000" opacity="0.8"></a-sphere>
+      </a-marker>
 
-      // 1. スマホの背面カメラを起動
-      async function initCamera() {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              facingMode: 'environment', // 背面カメラ
-              width: { ideal: 640 }, // 処理速度向上のため解像度を抑える
-              height: { ideal: 480 }
-            }
-          });
-          video.srcObject = stream;
-          
-          // ビデオの読み込み完了を待ってからキャンバスを設定
-          video.onloadedmetadata = () => {
-            setupCanvases();
-            statusDiv.innerText = '赤いモノを探しています...';
-            requestAnimationFrame(processFrame); // ループ処理開始
-          };
-        } catch (err) {
-          statusDiv.innerText = 'エラー: ' + err.message;
-          console.error(err);
-        }
-      }
+      <!-- ID:1 のマーカー（－電荷用） -->
+      <a-marker type="barcode" value="1" id="marker-minus">
+        <a-sphere radius="0.3" color="#0000FF" opacity="0.8"></a-sphere>
+      </a-marker>
 
-      // 2. キャンバスのサイズ設定
-      function setupCanvases() {
-        // 表示用オーバーレイ（画面サイズ）
-        overlay.width = window.innerWidth;
-        overlay.height = window.innerHeight;
-        overlayCtx = overlay.getContext('2d');
+      <!-- ID:2 のマーカー（テスト電荷の発射台用） -->
+      <a-marker type="barcode" value="2" id="marker-launcher">
+        <!-- 向きが分かるように、円柱と矢印（円錐）を組み合わせる -->
+        <a-cylinder radius="0.4" height="0.1" color="#00FF00" opacity="0.5"></a-cylinder>
+        <a-cone radius-bottom="0.1" height="0.3" color="#00FF00" position="0 0.2 -0.3" rotation="90 0 0"></a-cone>
+      </a-marker>
 
-        // 処理用（ビデオの解像度サイズ）
-        procCanvas.width = video.videoWidth;
-        procCanvas.height = video.videoHeight;
-        procCtx = procCanvas.getContext('2d');
-      }
-
-      // 3. 毎フレームの処理ループ
-      function processFrame() {
-        if (!procCtx || video.paused || video.ended) {
-          requestAnimationFrame(processFrame);
-          return;
-        }
-
-        // 3-1. ビデオ映像を処理用キャンバスに描画
-        procCtx.drawImage(video, 0, 0, procCanvas.width, procCanvas.height);
-        
-        // 3-2. 全画素のRGBAデータを取得
-        const imageData = procCtx.getImageData(0, 0, procCanvas.width, procCanvas.height);
-        const data = imageData.data; // [r, g, b, a, r, g, b, a, ...] という配列
-
-        let redPixels = []; // 赤い画素の座標を貯める配列
-
-        // 3-3. 画素を走査して「赤さ」を判定（速度優先で数画素おきに間引く）
-        const step = 4; // 4画素ごとにチェック
-        for (let y = 0; y < procCanvas.height; y += step) {
-          for (let x = 0; x < procCanvas.width; x += step) {
-            const index = (y * procCanvas.width + x) * 4;
-            const r = data[index];     // 赤成分
-            const g = data[index + 1]; // 緑成分
-            const b = data[index + 2]; // 青成分
-
-            // --- ★ここが「赤色判定」の肝 ---
-            // 簡単な判定基準: 「赤が緑より十分強く、青より十分強い」
-            if (r > 100 && r > g * 1.5 && r > b * 1.5) {
-              redPixels.push({ x, y });
-            }
-          }
-        }
-
-        // 3-4. 画面上にマークを描画
-        drawMarkers(redPixels);
-
-        // 次のフレームへ
-        requestAnimationFrame(processFrame);
-      }
-
-      // 4. 赤い部分にマーク（枠）を描画
-      function drawMarkers(pixels) {
-        // 前のフレームの描画をクリア
-        overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
-        
-        if (pixels.length === 0) return;
-
-        // 4-1. 赤い画素が集まっている範囲（バウンディングボックス）を計算
-        let minX = procCanvas.width, maxX = 0, minY = procCanvas.height, maxY = 0;
-        for (let p of pixels) {
-          if (p.x < minX) minX = p.x;
-          if (p.x > maxX) maxX = p.x;
-          if (p.y < minY) minY = p.y;
-          if (p.y > maxY) maxY = p.y;
-        }
-
-        // 4-2. 処理座標系（ビデオ）から表示座標系（画面）へ変換
-        const scaleX = overlay.width / procCanvas.width;
-        const scaleY = overlay.height / procCanvas.height;
-
-        // カメラ映像が object-fit: cover なので、中央合わせの計算が必要
-        const videoRatio = procCanvas.width / procCanvas.height;
-        const screenRatio = overlay.width / overlay.height;
-        
-        let finalScale, offsetX = 0, offsetY = 0;
-        if (videoRatio > screenRatio) {
-          // ビデオの方が横長（上下に黒帯ができる状態をcoverにする）
-          finalScale = overlay.height / procCanvas.height;
-          offsetX = (overlay.width - procCanvas.width * finalScale) / 2;
-        } else {
-          // ビデオの方が縦長（左右に黒帯ができる状態をcoverにする）
-          finalScale = overlay.width / procCanvas.width;
-          offsetY = (overlay.height - procCanvas.height * finalScale) / 2;
-        }
-
-        // 座標変換
-        const screenMinX = minX * finalScale + offsetX;
-        const screenMaxX = maxX * finalScale + offsetX;
-        const screenMinY = minY * finalScale + offsetY;
-        const screenMaxY = maxY * finalScale + offsetY;
-        const width = screenMaxX - screenMinX;
-        const height = screenMaxY - screenMinY;
-
-        // 4-3. 枠を描画
-        if (pixels.length > 50) { // ある程度の大きさの塊だけマークする
-          overlayCtx.strokeStyle = '#ff0000'; // 赤い枠
-          overlayCtx.lineWidth = 4;
-          overlayCtx.strokeRect(screenMinX, screenMinY, width, height);
-
-          // ラベル描画
-          overlayCtx.fillStyle = '#ff0000';
-          overlayCtx.font = 'bold 20px sans-serif';
-          overlayCtx.fillText('RED OBJECT', screenMinX, screenMinY - 10);
-        }
-      }
-
-      // 画面サイズ変更時にキャンバスを再設定
-      window.addEventListener('resize', setupCanvases);
-
-      // 起動
-      initCamera();
-    </script>
+      <a-entity camera></a-entity>
+    </a-scene>
   </body>
 </html>
