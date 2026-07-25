@@ -1,35 +1,284 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <meta charset="utf-8" />
-    <title>AR物理実験室 - マルチマーカー版</title>
-    <!-- A-Frame と AR.js を読み込み -->
-    <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
-    <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
-  </head>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AR物理実験室 - 電場と磁場（ジッター解消版）</title>
+  
+  <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
+  <!-- AR.jsは最新のマスターブランチを利用 -->
+  <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
 
-  <body style="margin: 0; overflow: hidden;">
-    <!-- ARシーンの構築：バーコードマーカー（3x3）を認識する設定に変更 -->
-    <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3;">
+  <script>
+    // 【改善点③】Three.jsを用いた線形補間(Lerp)コンポーネント
+    // マーカーの生データを直接使わず、目標座標に向けて滑らかに移動・回転させる
+    AFRAME.registerComponent('smooth-follower', {
+      schema: {
+        target: {type: 'selector'},
+        lerpAmount: {type: 'number', default: 0.1} // 追従スピード（小さいほど滑らか）
+      },
+      init: function() {
+        this.targetWorldPos = new THREE.Vector3();
+        this.targetWorldQuat = new THREE.Quaternion();
+        // 初期状態は非表示
+        this.el.object3D.visible = false;
+      },
+      tick: function () {
+        if (!this.data.target) return;
+        const targetEl = this.data.target;
 
-      <!-- ID:0 のマーカー（＋電荷用） -->
-      <a-marker type="barcode" value="0" id="marker-plus">
-        <a-sphere radius="0.3" color="#FF0000" opacity="0.8"></a-sphere>
-      </a-marker>
+        // マーカーが認識されている場合のみ追従・表示
+        if (targetEl.object3D.visible) {
+          this.el.object3D.visible = true;
 
-      <!-- ID:1 のマーカー（－電荷用） -->
-      <a-marker type="barcode" value="1" id="marker-minus">
-        <a-sphere radius="0.3" color="#0000FF" opacity="0.8"></a-sphere>
-      </a-marker>
+          // マーカーのワールド座標と回転を取得
+          targetEl.object3D.getWorldPosition(this.targetWorldPos);
+          targetEl.object3D.getWorldQuaternion(this.targetWorldQuat);
 
-      <!-- ID:2 のマーカー（テスト電荷の発射台用） -->
-      <a-marker type="barcode" value="2" id="marker-launcher">
-        <!-- 向きが分かるように、円柱と矢印（円錐）を組み合わせる -->
-        <a-cylinder radius="0.4" height="0.1" color="#00FF00" opacity="0.5"></a-cylinder>
-        <a-cone radius-bottom="0.1" height="0.3" color="#00FF00" position="0 0.2 -0.3" rotation="90 0 0"></a-cone>
-      </a-marker>
+          // 現在位置から目標位置へ線形補間 (Lerp)
+          this.el.object3D.position.lerp(this.targetWorldPos, this.data.lerpAmount);
+          // 現在の回転から目標の回転へ球面線形補間 (Slerp)
+          this.el.object3D.quaternion.slerp(this.targetWorldQuat, this.data.lerpAmount);
+        } else {
+          // マーカーを見失ったら非表示にする
+          this.el.object3D.visible = false;
+        }
+      }
+    });
 
-      <a-entity camera></a-entity>
-    </a-scene>
-  </body>
+    // 1. 点電荷 (ウニ状・距離の2乗に反比例)
+    AFRAME.registerComponent('point-charge-field', {
+      init: function () {
+        const scene3D = this.el.object3D;
+        const chargePos = new THREE.Vector3(0, 1.0, 0);
+        const coulombK = 1.0;
+
+        const rMin = 0.5, rMax = 2.0, rSteps = 3;
+        const thetaSteps = 6, phiSteps = 12;  
+
+        for (let i = 0; i <= rSteps; i++) {
+          const r = rMin + (rMax - rMin) * (i / rSteps);
+          for (let j = 0; j <= thetaSteps; j++) {
+            const theta = Math.PI * (j / thetaSteps);
+            const currentPhiSteps = (j === 0 || j === thetaSteps) ? 1 : phiSteps;
+
+            for (let phiIndex = 0; phiIndex < currentPhiSteps; phiIndex++) {
+              const phi = (Math.PI * 2) * (phiIndex / currentPhiSteps);
+              const x = r * Math.sin(theta) * Math.cos(phi);
+              const y = r * Math.cos(theta);
+              const z = r * Math.sin(theta) * Math.sin(phi);
+
+              const targetPos = new THREE.Vector3(x, y, z).add(chargePos);
+              if (targetPos.y < 0) continue;
+
+              const direction = new THREE.Vector3().subVectors(targetPos, chargePos);
+              const distance = direction.length();
+              direction.normalize();
+              
+              const magnitude = coulombK / (distance * distance);
+              const arrowLength = Math.min(magnitude * 0.5, 0.4);
+              const colorIntensity = Math.min(magnitude, 1.0);
+              const color = new THREE.Color().setHSL((1.0 - colorIntensity) * 0.66, 1.0, 0.5);
+
+              scene3D.add(new THREE.ArrowHelper(direction, targetPos, arrowLength, color.getHex(), arrowLength * 0.3, arrowLength * 0.3));
+            }
+          }
+        }
+      }
+    });
+
+    // 8. 一様磁場（ローレンツ力用）
+    AFRAME.registerComponent('uniform-magnetic-field', {
+      init: function() {
+        const scene3D = this.el.object3D;
+        const bColor = 0x3333ff; // 磁力線の青
+        // Y軸上向きの磁場矢印を等間隔に配置
+        for (let x = -1.2; x <= 1.2; x += 0.6) {
+          for (let z = -1.2; z <= 1.2; z += 0.6) {
+            const startPos = new THREE.Vector3(x, 0.1, z);
+            const dir = new THREE.Vector3(0, 1, 0); // 上向き
+            scene3D.add(new THREE.ArrowHelper(dir, startPos, 1.8, bColor, 0.15, 0.1));
+          }
+        }
+      }
+    });
+
+    // 9. ローレンツ力による荷電粒子の運動
+    AFRAME.registerComponent('lorentz-particle-system', {
+      init: function() {
+        this.particles = [];
+        this.lastLaunch = 0;
+        this.B = new THREE.Vector3(0, 1.5, 0); // Y軸上向きの磁場ベクトル
+      },
+      tick: function(time, timeDelta) {
+        // dtを秒単位にし、コマ落ち時に一気に進みすぎないよう最大値を制限
+        const dt = Math.min(timeDelta / 1000.0, 0.05);
+        
+        // 3秒に1回、新しいプラス電荷を発射
+        if (time - this.lastLaunch > 3000) {
+          this.launchParticle();
+          this.lastLaunch = time;
+        }
+
+        // 各粒子の位置と速度を計算して更新
+        this.particles.forEach((p) => {
+          // フレミングの左手の法則 (ローレンツ力 F = q * (v × B))
+          const force = new THREE.Vector3().crossVectors(p.v, this.B).multiplyScalar(p.q);
+          const acc = force.divideScalar(p.m); // a = F / m
+          
+          p.v.add(acc.multiplyScalar(dt)); // 速度の更新
+          p.pos.add(p.v.clone().multiplyScalar(dt)); // 位置の更新
+          
+          p.el.setAttribute('position', `${p.pos.x} ${p.pos.y} ${p.pos.z}`);
+          
+          // 軌跡（Trail）の更新
+          p.points.push(p.pos.clone());
+          if (p.points.length > 200) p.points.shift(); 
+          
+          p.line.geometry.dispose(); 
+          p.line.geometry = new THREE.BufferGeometry().setFromPoints(p.points);
+          
+          p.life -= dt;
+          if (p.life < 0) {
+            p.el.parentNode.removeChild(p.el);
+            this.el.object3D.remove(p.line);
+            p.line.geometry.dispose();
+            p.line.material.dispose();
+            p.isDead = true;
+          }
+        });
+        
+        this.particles = this.particles.filter(p => !p.isDead);
+      },
+      launchParticle: function() {
+        let el = document.createElement('a-sphere');
+        el.setAttribute('radius', '0.08');
+        el.setAttribute('color', '#FF4444');
+        
+        let startPos = new THREE.Vector3(-0.6, 0.2, 0); 
+        el.setAttribute('position', `${startPos.x} ${startPos.y} ${startPos.z}`);
+        this.el.appendChild(el);
+        
+        const material = new THREE.LineBasicMaterial({ color: 0xFF4444, linewidth: 2 });
+        const geometry = new THREE.BufferGeometry().setFromPoints([startPos]);
+        const line = new THREE.Line(geometry, material);
+        this.el.object3D.add(line);
+        
+        this.particles.push({
+          el: el,
+          line: line,
+          q: 1.0, 
+          m: 1.0, 
+          v: new THREE.Vector3(1.2, 0.25, 0.0), 
+          pos: startPos.clone(),
+          points: [startPos.clone()],
+          life: 8.0, 
+          isDead: false
+        });
+      }
+    });
+
+    // UIボタンの切り替え処理
+    document.addEventListener('DOMContentLoaded', function() {
+      const groups = {
+        point: document.getElementById('point-charge-group'),
+        line: document.getElementById('line-charge-group'),
+        surface: document.getElementById('surface-charge-group'),
+        magnet: document.getElementById('magnet-group'),
+        uMagnet: document.getElementById('u-magnet-group'),
+        wire: document.getElementById('wire-group'),
+        circular: document.getElementById('circular-wire-group'),
+        lorentz: document.getElementById('lorentz-group') 
+      };
+
+      function hideAll() {
+        for (let key in groups) {
+          if(groups[key]) groups[key].setAttribute('visible', 'false');
+        }
+      }
+
+      const bindButton = (id, groupKey) => {
+        const btn = document.getElementById(id);
+        if(btn && groups[groupKey]) {
+          btn.addEventListener('click', () => { hideAll(); groups[groupKey].setAttribute('visible', 'true'); });
+        }
+      }
+
+      bindButton('btn-point', 'point');
+      bindButton('btn-line', 'line');
+      bindButton('btn-surface', 'surface');
+      bindButton('btn-magnet', 'magnet');
+      bindButton('btn-umagnet', 'uMagnet');
+      bindButton('btn-wire', 'wire');
+      bindButton('btn-circular', 'circular');
+      bindButton('btn-lorentz', 'lorentz');
+    });
+  </script>
+</head>
+<body style="margin: 0; overflow: hidden; background-color: #000;">
+  
+  <!-- UIボタン群 -->
+  <div style="position: absolute; bottom: 30px; width: 100%; display: flex; justify-content: center; flex-wrap: wrap; z-index: 10;">
+    <button id="btn-point" style="padding: 10px; margin: 4px; font-size: 14px; font-weight: bold; background-color: #ff4444; color: white; border: 2px solid white; border-radius: 8px;">点電荷</button>
+    <button id="btn-magnet" style="padding: 10px; margin: 4px; font-size: 14px; font-weight: bold; background-color: #3333FF; color: white; border: 2px solid white; border-radius: 8px;">棒磁石</button>
+    <button id="btn-wire" style="padding: 10px; margin: 4px; font-size: 14px; font-weight: bold; background-color: #FF9933; color: white; border: 2px solid white; border-radius: 8px;">直線電流</button>
+    <button id="btn-circular" style="padding: 10px; margin: 4px; font-size: 14px; font-weight: bold; background-color: #E6B800; color: white; border: 2px solid white; border-radius: 8px;">円電流</button>
+    <button id="btn-lorentz" style="padding: 10px; margin: 4px; font-size: 14px; font-weight: bold; background-color: #FF33CC; color: white; border: 2px solid white; border-radius: 8px;">ローレンツ力</button>
+  </div>
+
+  <!-- 【改善点②】detectionModeをmono_and_matrixに変更し、バーコードマーカーを使用 -->
+  <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false; trackingMethod: best; detectionMode: mono_and_matrix; matrixCodeType: 3x3;">
+    
+    <!-- 【改善点①】smoothプロパティを追加し、AR.js内部のスムージングを有効化 -->
+    <a-marker id="marker-0" type="barcode" value="0" smooth="true" smoothCount="10" smoothTolerance="0.01" smoothThreshold="5">
+      <!-- ※マーカーの中には直接3Dモデルを入れない（入れ落ち防止・Lerp追従のため） -->
+    </a-marker>
+
+    <!-- 複数マーカー実装の足掛かり（今回はUI切り替えメインのため予備として配置） -->
+    <a-marker id="marker-1" type="barcode" value="1" smooth="true" smoothCount="10" smoothTolerance="0.01" smoothThreshold="5"></a-marker>
+
+    <a-entity camera></a-entity>
+
+    <!-- 
+      ここからが実際の3Dモデルと物理シミュレーションです。
+      「smooth-follower」コンポーネントで、id="marker-0"の座標を滑らかに追いかけます。
+    -->
+    <a-entity id="physics-container" smooth-follower="target: #marker-0; lerpAmount: 0.15">
+      
+      <!-- 点電荷 -->
+      <a-entity id="point-charge-group" visible="true">
+        <a-sphere position="0 1.0 0" radius="0.1" color="#FF3333" opacity="0.9"></a-sphere>
+        <a-entity point-charge-field></a-entity>
+      </a-entity>
+
+      <!-- 棒磁石 -->
+      <a-entity id="magnet-group" visible="false">
+        <a-box position="0 1.5 0" width="0.2" height="1.0" depth="0.2" color="#FF3333" opacity="0.9"></a-box>
+        <a-box position="0 0.5 0" width="0.2" height="1.0" depth="0.2" color="#3333FF" opacity="0.9"></a-box>
+      </a-entity>
+
+      <!-- 直線電流 -->
+      <a-entity id="wire-group" visible="false">
+        <a-cylinder position="0 1.0 0" radius="0.02" height="2.0" color="#FF8800" metalness="0.5" roughness="0.4" opacity="1.0"></a-cylinder>
+        <a-cone position="0 2.1 0" radius-bottom="0.06" radius-top="0" height="0.2" color="#FF0000"></a-cone>
+      </a-entity>
+
+      <!-- 円電流 -->
+      <a-entity id="circular-wire-group" visible="false">
+        <a-torus position="0 1.0 0" radius="0.8" radius-tubular="0.01" color="#FF8800" metalness="0.5" roughness="0.4" rotation="90 0 0"></a-torus>
+        <a-cone position="0.8 1.0 0" rotation="-90 0 0" radius-bottom="0.04" radius-top="0" height="0.2" color="#FF0000"></a-cone>
+        <a-cone position="-0.8 1.0 0" rotation="90 0 0" radius-bottom="0.04" radius-top="0" height="0.2" color="#FF0000"></a-cone>
+        <a-cone position="0 1.0 -0.8" rotation="0 0 90" radius-bottom="0.04" radius-top="0" height="0.2" color="#FF0000"></a-cone>
+        <a-cone position="0 1.0 0.8" rotation="0 0 -90" radius-bottom="0.04" radius-top="0" height="0.2" color="#FF0000"></a-cone>
+      </a-entity>
+
+      <!-- ローレンツ力 -->
+      <a-entity id="lorentz-group" visible="false">
+        <a-entity uniform-magnetic-field></a-entity>
+        <a-entity lorentz-particle-system></a-entity>
+      </a-entity>
+
+    </a-entity>
+  </a-scene>
+</body>
 </html>
