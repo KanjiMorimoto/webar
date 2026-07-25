@@ -9,7 +9,7 @@
   <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
 
   <script>
-    // 1. マーカー追従（ピタッと止まるように改良済み）
+    // 1. マーカー追従
     AFRAME.registerComponent('smooth-follower', {
       schema: {
         target: {type: 'selector'},
@@ -48,7 +48,7 @@
       }
     });
 
-    // 2. 電場の重ね合わせコンポーネント (修正版)
+    // 2. 電場の重ね合わせコンポーネント (球を無くし、透明なアンカーを使用)
     AFRAME.registerComponent('superposed-field', {
       schema: {
         charge0Val: {type: 'number', default: 1.0},
@@ -61,9 +61,9 @@
         this.charge0El = document.getElementById('charge0-container');
         this.charge1El = document.getElementById('charge1-container');
 
-        // ★ コンテナだけでなく、球の要素自体も取得しておく
-        this.sphere0El = document.getElementById('charge0-sphere');
-        this.sphere1El = document.getElementById('charge1-sphere');
+        // 透明な基準点（アンカー）を取得
+        this.anchor0El = document.getElementById('charge0-anchor');
+        this.anchor1El = document.getElementById('charge1-anchor');
 
         this.pos0 = new THREE.Vector3();
         this.pos1 = new THREE.Vector3();
@@ -115,12 +115,12 @@
         }
         this.el.object3D.visible = true;
 
-        // ★ 計算で高さを足すのではなく、球(sphere)のワールド座標を直接取得する
+        // 球の代わりに透明なアンカーの座標を取得
         if (isC0Visible) {
-          this.sphere0El.object3D.getWorldPosition(this.pos0);
+          this.anchor0El.object3D.getWorldPosition(this.pos0);
         }
         if (isC1Visible) {
-          this.sphere1El.object3D.getWorldPosition(this.pos1);
+          this.anchor1El.object3D.getWorldPosition(this.pos1);
         }
 
         for (let i = 0; i < this.arrows.length; i++) {
@@ -188,24 +188,20 @@
     document.addEventListener('DOMContentLoaded', () => {
       const fieldEntity = document.getElementById('electric-field-manager');
       
-      const updateCharge = (id, sliderId, labelId, sphereId, attrName) => {
+      const updateCharge = (sliderId, labelId, attrName) => {
         const slider = document.getElementById(sliderId);
         const label = document.getElementById(labelId);
-        const sphere = document.getElementById(sphereId);
 
         slider.addEventListener('input', (e) => {
           const val = parseFloat(e.target.value);
           label.textContent = val.toFixed(1);
           fieldEntity.setAttribute('superposed-field', attrName, val);
-
-          if (val > 0) sphere.setAttribute('color', '#FF3333');
-          else if (val < 0) sphere.setAttribute('color', '#3333FF');
-          else sphere.setAttribute('color', '#888888');
+          // ※球の色の更新処理は削除済み
         });
       };
 
-      updateCharge(0, 'charge0-slider', 'charge0-label', 'charge0-sphere', 'charge0Val');
-      updateCharge(1, 'charge1-slider', 'charge1-label', 'charge1-sphere', 'charge1Val');
+      updateCharge('charge0-slider', 'charge0-label', 'charge0Val');
+      updateCharge('charge1-slider', 'charge1-label', 'charge1Val');
     });
   </script>
 </head>
@@ -236,11 +232,13 @@
     <a-entity camera></a-entity>
 
     <a-entity id="charge0-container" smooth-follower="target: #marker-0; lerpAmount: 0.15">
-      <a-sphere id="charge0-sphere" position="0 2.5 0" radius="0.1" color="#FF3333" opacity="0.9"></a-sphere>
+      <!-- 球を削除し、透明なエンティティ(アンカー)で座標のみ確保 -->
+      <a-entity id="charge0-anchor" position="0 2.5 0"></a-entity>
     </a-entity>
 
     <a-entity id="charge1-container" smooth-follower="target: #marker-1; lerpAmount: 0.15">
-      <a-sphere id="charge1-sphere" position="0 2.5 0" radius="0.1" color="#3333FF" opacity="0.9"></a-sphere>
+      <!-- 球を削除し、透明なエンティティ(アンカー)で座標のみ確保 -->
+      <a-entity id="charge1-anchor" position="0 2.5 0"></a-entity>
     </a-entity>
 
     <a-entity id="electric-field-manager" superposed-field="charge0Val: 1.0; charge1Val: -1.0"></a-entity>
