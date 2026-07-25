@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>AR物理実験室 - 点電荷</title>
+  <title>AR物理実験室 - 電場の重ね合わせ</title>
   
   <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
   <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
 
   <script>
-    // マーカー追従用のスムージングコンポーネント
+    // 1. マーカー追従（前回と同じ）
     AFRAME.registerComponent('smooth-follower', {
       schema: {
         target: {type: 'selector'},
@@ -36,125 +36,230 @@
       }
     });
 
-    // 点電荷コンポーネント (動的更新に対応)
-    AFRAME.registerComponent('point-charge-field', {
+    // 2. 電場の重ね合わせコンポーネント
+    AFRAME.registerComponent('superposed-field', {
       schema: {
-        charge: {type: 'number', default: 1.0} // 電気量の大きさと符号
+        charge0Val: {type: 'number', default: 1.0},
+        charge1Val: {type: 'number', default: -1.0}
       },
       init: function () {
-        // 矢印をまとめるグループを作成
-        this.arrowGroup = new THREE.Group();
-        this.el.object3D.add(this.arrowGroup);
-      },
-      update: function () {
-        // 古い矢印をクリア
-        while (this.arrowGroup.children.length > 0) {
-          this.arrowGroup.remove(this.arrowGroup.children[0]);
-        }
+        this.arrows = [];
+        this.offsets = []; // 各矢印の電荷からの相対位置
+        
+        // 参照用のEntityを取得
+        this.charge0El = document.getElementById('charge0-container');
+        this.charge1El = document.getElementById('charge1-container');
 
-        const chargeValue = this.data.charge;
-        if (chargeValue === 0) return; // 電荷0の場合は描画しない
+        // 計算最適化のための再利用変数（毎フレームのメモリ確保を防ぐ）
+        this.pos0 = new THREE.Vector3();
+        this.pos1 = new THREE.Vector3();
+        this.targetPos = new THREE.Vector3();
+        this.e0 = new THREE.Vector3();
+        this.e1 = new THREE.Vector3();
+        this.eTotal = new THREE.Vector3();
+        this.colorObj = new THREE.Color();
 
-        const chargePos = new THREE.Vector3(0, 1.0, 0);
-        const coulombK = Math.abs(chargeValue); // 大きさ
-        const sign = Math.sign(chargeValue);    // 符号 (正なら1, 負なら-1)
-
+        // 電荷の周囲に配置するオフセット座標の生成（サンプリング）
         const rMin = 0.5, rMax = 2.0, rSteps = 3;
-        const thetaSteps = 6, phiSteps = 12;  
+        const thetaSteps = 6, phiSteps = 12;
 
-        for (let i = 0; i <= rSteps; i++) {
-          const r = rMin + (rMax - rMin) * (i / rSteps);
-          for (let j = 0; j <= thetaSteps; j++) {
-            const theta = Math.PI * (j / thetaSteps);
-            const currentPhiSteps = (j === 0 || j === thetaSteps) ? 1 : phiSteps;
+        const generateOffsets = (ownerIndex) => {
+          for (let i = 0; i <= rSteps; i++) {
+            const r = rMin + (rMax - rMin) * (i / rSteps);
+            for (let j = 0; j <= thetaSteps; j++) {
+              const theta = Math.PI * (j / thetaSteps);
+              const currentPhiSteps = (j === 0 || j === thetaSteps) ? 1 : phiSteps;
 
-            for (let phiIndex = 0; phiIndex < currentPhiSteps; phiIndex++) {
-              const phi = (Math.PI * 2) * (phiIndex / currentPhiSteps);
-              const x = r * Math.sin(theta) * Math.cos(phi);
-              const y = r * Math.cos(theta);
-              const z = r * Math.sin(theta) * Math.sin(phi);
+              for (let k = 0; k < currentPhiSteps; k++) {
+                const phi = (Math.PI * 2) * (k / currentPhiSteps);
+                const x = r * Math.sin(theta) * Math.cos(phi);
+                const y = r * Math.cos(theta);
+                const z = r * Math.sin(theta) * Math.sin(phi);
+                
+                // 机の下(y<0)になる可能性のあるオフセットは予め弾いておく
+                if (y < -0.1) continue; 
 
-              const targetPos = new THREE.Vector3(x, y, z).add(chargePos);
-              if (targetPos.y < 0) continue;
-
-              const direction = new THREE.Vector3().subVectors(targetPos, chargePos);
-              const distance = direction.length();
-              direction.normalize();
-              
-              // 負電荷の場合はベクトルの向きを逆にする
-              if (sign < 0) direction.negate();
-
-              const magnitude = coulombK / (distance * distance);
-              const arrowLength = Math.min(magnitude * 0.5, 0.4);
-              // 電荷量が大きいほど色も濃くなるように調整
-              const colorIntensity = Math.min(magnitude, 1.0);
-              const color = new THREE.Color().setHSL((1.0 - colorIntensity) * 0.66, 1.0, 0.5);
-
-              const arrow = new THREE.ArrowHelper(direction, targetPos, arrowLength, color.getHex(), arrowLength * 0.3, arrowLength * 0.3);
-              this.arrowGroup.add(arrow);
+                this.offsets.push({ vec: new THREE.Vector3(x, y, z), owner: ownerIndex });
+                
+                // 矢印を生成してシーンに追加
+                const arrow = new THREE.ArrowHelper(new THREE.Vector3(0,1,0), new THREE.Vector3(0,0,0), 0.1, 0xffffff, 0.1, 0.1);
+                this.el.object3D.add(arrow);
+                this.arrows.push(arrow);
+              }
             }
           }
+        };
+
+        generateOffsets(0); // 電荷0由来のサンプリングポイント
+        generateOffsets(1); // 電荷1由来のサンプリングポイント
+      },
+
+      tick: function () {
+        const isC0Visible = this.charge0El.object3D.visible;
+        const isC1Visible = this.charge1El.object3D.visible;
+        const val0 = this.data.charge0Val;
+        const val1 = this.data.charge1Val;
+
+        // 両方見失っている場合は矢印を消す
+        if (!isC0Visible && !isC1Visible) {
+          this.el.object3D.visible = false;
+          return;
+        }
+        this.el.object3D.visible = true;
+
+        // 各電荷のワールド座標（中心位置をY=1.0とする）
+        if (isC0Visible) {
+          this.charge0El.object3D.getWorldPosition(this.pos0);
+          this.pos0.y += 1.0; 
+        }
+        if (isC1Visible) {
+          this.charge1El.object3D.getWorldPosition(this.pos1);
+          this.pos1.y += 1.0;
+        }
+
+        // 各矢印のベクトル計算
+        for (let i = 0; i < this.arrows.length; i++) {
+          const arrow = this.arrows[i];
+          const offset = this.offsets[i];
+
+          // 所属する電荷が見失われている or 電気量0ならその矢印は非表示
+          if ((offset.owner === 0 && (!isC0Visible || val0 === 0)) ||
+              (offset.owner === 1 && (!isC1Visible || val1 === 0))) {
+            arrow.visible = false;
+            continue;
+          }
+
+          arrow.visible = true;
+          
+          // 矢印の起点を決定
+          const basePos = offset.owner === 0 ? this.pos0 : this.pos1;
+          this.targetPos.copy(basePos).add(offset.vec);
+
+          // 机(y=0)より下なら非表示
+          if (this.targetPos.y < 0) {
+            arrow.visible = false;
+            continue;
+          }
+
+          // 電場ベクトルの初期化
+          this.eTotal.set(0, 0, 0);
+
+          // 電荷0からの電場 E0 (見えているかつ電荷がある場合)
+          if (isC0Visible && val0 !== 0) {
+            this.e0.subVectors(this.targetPos, this.pos0);
+            const distSq = this.e0.lengthSq();
+            if (distSq > 0.01) {
+              const mag = val0 / distSq;
+              this.e0.normalize().multiplyScalar(mag);
+              this.eTotal.add(this.e0);
+            }
+          }
+
+          // 電荷1からの電場 E1 (見えているかつ電荷がある場合)
+          if (isC1Visible && val1 !== 0) {
+            this.e1.subVectors(this.targetPos, this.pos1);
+            const distSq = this.e1.lengthSq();
+            if (distSq > 0.01) {
+              const mag = val1 / distSq;
+              this.e1.normalize().multiplyScalar(mag);
+              this.eTotal.add(this.e1);
+            }
+          }
+
+          // 合成ベクトルの大きさで矢印の長さと色を決定
+          const totalMag = this.eTotal.length();
+          if (totalMag < 0.01) {
+            arrow.visible = false;
+            continue;
+          }
+
+          const arrowLength = Math.min(totalMag * 0.5, 0.4);
+          const colorIntensity = Math.min(totalMag, 1.0);
+          this.colorObj.setHSL((1.0 - colorIntensity) * 0.66, 1.0, 0.5);
+
+          this.eTotal.normalize();
+          
+          // 矢印の更新
+          arrow.position.copy(this.targetPos);
+          arrow.setDirection(this.eTotal);
+          arrow.setLength(arrowLength, arrowLength * 0.3, arrowLength * 0.3);
+          arrow.setColor(this.colorObj.getHex());
         }
       }
     });
 
-    // UI(スライダー)とA-Frameの連動処理
+    // UI(スライダー)とA-Frameの連動
     document.addEventListener('DOMContentLoaded', () => {
-      const slider = document.getElementById('charge-slider');
-      const label = document.getElementById('charge-value-label');
-      const fieldEntity = document.getElementById('electric-field');
-      const sphereEntity = document.getElementById('charge-sphere');
+      const fieldEntity = document.getElementById('electric-field-manager');
+      
+      const updateCharge = (id, sliderId, labelId, sphereId, attrName) => {
+        const slider = document.getElementById(sliderId);
+        const label = document.getElementById(labelId);
+        const sphere = document.getElementById(sphereId);
 
-      slider.addEventListener('input', (e) => {
-        const val = parseFloat(e.target.value);
-        
-        // ラベルの更新
-        label.textContent = val.toFixed(1);
+        slider.addEventListener('input', (e) => {
+          const val = parseFloat(e.target.value);
+          label.textContent = val.toFixed(1);
+          fieldEntity.setAttribute('superposed-field', attrName, val);
 
-        // 電場ベクトルの更新
-        fieldEntity.setAttribute('point-charge-field', 'charge', val);
+          // 球の色を更新 (正:赤系, 負:青系, 0:グレー)
+          if (val > 0) sphere.setAttribute('color', '#FF3333');
+          else if (val < 0) sphere.setAttribute('color', '#3333FF');
+          else sphere.setAttribute('color', '#888888');
+        });
+      };
 
-        // 中心球の色の更新 (正電荷: 赤系, 負電荷: 青系, 0: グレー)
-        if (val > 0) {
-          sphereEntity.setAttribute('color', '#FF3333');
-        } else if (val < 0) {
-          sphereEntity.setAttribute('color', '#3333FF');
-        } else {
-          sphereEntity.setAttribute('color', '#888888');
-        }
-      });
+      updateCharge(0, 'charge0-slider', 'charge0-label', 'charge0-sphere', 'charge0Val');
+      updateCharge(1, 'charge1-slider', 'charge1-label', 'charge1-sphere', 'charge1Val');
     });
   </script>
 </head>
 <body style="margin: 0; overflow: hidden; background-color: #000;">
   
-  <!-- タイトルラベル -->
   <div style="position: absolute; top: 20px; width: 100%; display: flex; justify-content: center; z-index: 10; pointer-events: none;">
     <div style="padding: 10px 20px; font-size: 16px; font-weight: bold; background-color: rgba(0, 0, 0, 0.7); color: white; border: 1px solid white; border-radius: 8px;">
-      点電荷の電場
+      電場の重ね合わせ（マーカー0 / マーカー1）
     </div>
   </div>
 
-  <!-- スライダーUI -->
-  <div style="position: absolute; bottom: 30px; width: 100%; display: flex; flex-direction: column; align-items: center; z-index: 10;">
-    <div style="color: white; font-size: 18px; font-weight: bold; margin-bottom: 10px; text-shadow: 1px 1px 3px black;">
-      電気量: <span id="charge-value-label">1.0</span>
+  <!-- スライダーUI（2つ並べる） -->
+  <div style="position: absolute; bottom: 20px; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 10px; z-index: 10;">
+    
+    <!-- 電荷0 (マーカー0) -->
+    <div style="width: 80%; max-width: 400px; display: flex; align-items: center; background: rgba(0,0,0,0.5); padding: 5px 15px; border-radius: 10px;">
+      <span style="color: white; font-weight: bold; width: 70px;">電荷0: <span id="charge0-label">1.0</span></span>
+      <input type="range" id="charge0-slider" min="-3.0" max="3.0" step="0.1" value="1.0" style="flex-grow: 1; margin-left: 10px;">
     </div>
-    <!-- min, maxでマイナスからプラスまで変化できるように設定 -->
-    <input type="range" id="charge-slider" min="-3.0" max="3.0" step="0.1" value="1.0" style="width: 70%; max-width: 400px; height: 30px;">
+
+    <!-- 電荷1 (マーカー1) -->
+    <div style="width: 80%; max-width: 400px; display: flex; align-items: center; background: rgba(0,0,0,0.5); padding: 5px 15px; border-radius: 10px;">
+      <span style="color: white; font-weight: bold; width: 70px;">電荷1: <span id="charge1-label">-1.0</span></span>
+      <input type="range" id="charge1-slider" min="-3.0" max="3.0" step="0.1" value="-1.0" style="flex-grow: 1; margin-left: 10px;">
+    </div>
+
   </div>
 
   <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false; trackingMethod: best; detectionMode: mono_and_matrix; matrixCodeType: 3x3;">
     
     <a-marker id="marker-0" type="barcode" value="0" smooth="true" smoothCount="10" smoothTolerance="0.01" smoothThreshold="5"></a-marker>
+    <a-marker id="marker-1" type="barcode" value="1" smooth="true" smoothCount="10" smoothTolerance="0.01" smoothThreshold="5"></a-marker>
 
     <a-entity camera></a-entity>
 
-    <a-entity id="physics-container" smooth-follower="target: #marker-0; lerpAmount: 0.15">
-      <!-- スクリプトから操作できるように id を付与 -->
-      <a-sphere id="charge-sphere" position="0 1.0 0" radius="0.1" color="#FF3333" opacity="0.9"></a-sphere>
-      <a-entity id="electric-field" point-charge-field="charge: 1.0"></a-entity>
+    <!-- 電荷0のコンテナ -->
+    <a-entity id="charge0-container" smooth-follower="target: #marker-0; lerpAmount: 0.15">
+      <a-sphere id="charge0-sphere" position="0 1.0 0" radius="0.1" color="#FF3333" opacity="0.9"></a-sphere>
     </a-entity>
+
+    <!-- 電荷1のコンテナ -->
+    <a-entity id="charge1-container" smooth-follower="target: #marker-1; lerpAmount: 0.15">
+      <!-- 初期値は-1.0なので青色 -->
+      <a-sphere id="charge1-sphere" position="0 1.0 0" radius="0.1" color="#3333FF" opacity="0.9"></a-sphere>
+    </a-entity>
+
+    <!-- 電場ベクトルを管理・描画する独立したEntity -->
+    <!-- 初期値として charge0Val=1.0, charge1Val=-1.0 を設定 -->
+    <a-entity id="electric-field-manager" superposed-field="charge0Val: 1.0; charge1Val: -1.0"></a-entity>
 
   </a-scene>
 </body>
