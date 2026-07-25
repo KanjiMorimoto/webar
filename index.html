@@ -9,7 +9,7 @@
   <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
 
   <script>
-    // 1. マーカー追従（ピタッと止まるように改良）
+    // 1. マーカー追従（ピタッと止まるように改良済み）
     AFRAME.registerComponent('smooth-follower', {
       schema: {
         target: {type: 'selector'},
@@ -19,7 +19,7 @@
         this.targetWorldPos = new THREE.Vector3();
         this.targetWorldQuat = new THREE.Quaternion();
         this.el.object3D.visible = false;
-        this.wasVisible = false; // 前のフレームで見えていたかを記憶
+        this.wasVisible = false;
       },
       tick: function () {
         if (!this.data.target) return;
@@ -32,15 +32,10 @@
           targetEl.object3D.getWorldQuaternion(this.targetWorldQuat);
           
           if (!this.wasVisible) {
-            // 見失った状態から復帰した瞬間は、補間せずに即座に位置を合わせる
             this.el.object3D.position.copy(this.targetWorldPos);
             this.el.object3D.quaternion.copy(this.targetWorldQuat);
           } else {
-            // 現在地と目標地の距離を計算
             const distance = this.el.object3D.position.distanceTo(this.targetWorldPos);
-            
-            // 距離が0.005（AR空間上での約5ミリ）より大きい場合のみ滑らかに移動させる
-            // これにより、静止時の微小なカメラのブレ（ジッター）を無視してピタッと止まる
             if (distance > 0.005) {
               this.el.object3D.position.lerp(this.targetWorldPos, this.data.lerpAmount);
               this.el.object3D.quaternion.slerp(this.targetWorldQuat, this.data.lerpAmount);
@@ -53,7 +48,7 @@
       }
     });
 
-    // 2. 電場の重ね合わせコンポーネント (変更なし)
+    // 2. 電場の重ね合わせコンポーネント (修正版)
     AFRAME.registerComponent('superposed-field', {
       schema: {
         charge0Val: {type: 'number', default: 1.0},
@@ -65,6 +60,10 @@
         
         this.charge0El = document.getElementById('charge0-container');
         this.charge1El = document.getElementById('charge1-container');
+
+        // ★ コンテナだけでなく、球の要素自体も取得しておく
+        this.sphere0El = document.getElementById('charge0-sphere');
+        this.sphere1El = document.getElementById('charge1-sphere');
 
         this.pos0 = new THREE.Vector3();
         this.pos1 = new THREE.Vector3();
@@ -116,13 +115,12 @@
         }
         this.el.object3D.visible = true;
 
+        // ★ 計算で高さを足すのではなく、球(sphere)のワールド座標を直接取得する
         if (isC0Visible) {
-          this.charge0El.object3D.getWorldPosition(this.pos0);
-          this.pos0.y += 2.5; 
+          this.sphere0El.object3D.getWorldPosition(this.pos0);
         }
         if (isC1Visible) {
-          this.charge1El.object3D.getWorldPosition(this.pos1);
-          this.pos1.y += 2.5;
+          this.sphere1El.object3D.getWorldPosition(this.pos1);
         }
 
         for (let i = 0; i < this.arrows.length; i++) {
@@ -220,22 +218,18 @@
   </div>
 
   <div style="position: absolute; bottom: 20px; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 10px; z-index: 10;">
-    
     <div style="width: 80%; max-width: 400px; display: flex; align-items: center; background: rgba(0,0,0,0.5); padding: 5px 15px; border-radius: 10px;">
       <span style="color: white; font-weight: bold; width: 70px;">電荷0: <span id="charge0-label">1.0</span></span>
       <input type="range" id="charge0-slider" min="-3.0" max="3.0" step="0.1" value="1.0" style="flex-grow: 1; margin-left: 10px;">
     </div>
-
     <div style="width: 80%; max-width: 400px; display: flex; align-items: center; background: rgba(0,0,0,0.5); padding: 5px 15px; border-radius: 10px;">
       <span style="color: white; font-weight: bold; width: 70px;">電荷1: <span id="charge1-label">-1.0</span></span>
       <input type="range" id="charge1-slider" min="-3.0" max="3.0" step="0.1" value="-1.0" style="flex-grow: 1; margin-left: 10px;">
     </div>
-
   </div>
 
   <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false; trackingMethod: best; detectionMode: mono_and_matrix; matrixCodeType: 3x3;">
     
-    <!-- AR.js側の二重スムージング設定（smooth="true"等）を削除してシンプルに -->
     <a-marker id="marker-0" type="barcode" value="0"></a-marker>
     <a-marker id="marker-1" type="barcode" value="1"></a-marker>
 
