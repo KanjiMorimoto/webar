@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>AR物理実験室 - 直線電流が作る磁場</title>
+  <title>AR物理実験室 - 電場の重ね合わせ</title>
   
   <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
   <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
 
   <script>
-    // 1. マーカー追従（★猶予時間タイマー付き）
+    // 1. マーカー追従（★猶予時間タイマー付きに移植）
     AFRAME.registerComponent('smooth-follower', {
       schema: {
         target: {type: 'selector'},
@@ -20,9 +20,8 @@
         this.targetWorldPos = new THREE.Vector3();
         this.targetWorldQuat = new THREE.Quaternion();
         this.el.object3D.visible = false; // 最初は非表示
-        this.lostTime = null; // ★見失った時間を記録する変数
+        this.lostTime = null; // 見失った時間を記録する変数
       },
-      // tickは毎フレーム呼ばれ、timeには起動からの経過時間(ms)が入る
       tick: function (time, timeDelta) {
         if (!this.data.target) return;
         const targetEl = this.data.target;
@@ -38,13 +37,13 @@
           this.el.object3D.quaternion.slerp(this.targetWorldQuat, this.data.lerpAmount);
         } else {
           // マーカーが見失われた場合：タイマー処理
-          if (this.el.object3D.visible) { // まだ表示されているなら
+          if (this.el.object3D.visible) {
             if (this.lostTime === null) {
               this.lostTime = time; // 見失った瞬間の時間を記録
             } else {
-              // 記録した時間から指定した猶予時間(1.5秒)が経過したかチェック
+              // 指定した猶予時間が経過したかチェック
               if (time - this.lostTime > this.data.hideDelay) {
-                this.el.object3D.visible = false; // 完全に外れたと判定して非表示にする
+                this.el.object3D.visible = false; // 完全に外れたと判定して非表示に
               }
             }
           }
@@ -52,127 +51,187 @@
       }
     });
 
-    // 2. 直線電流が作る磁場コンポーネント
-    AFRAME.registerComponent('magnetic-field-straight', {
+    // 2. 電場の重ね合わせコンポーネント
+    AFRAME.registerComponent('superposed-field', {
       schema: {
-        currentVal: {type: 'number', default: 1.0}
+        charge0Val: {type: 'number', default: 1.0},
+        charge1Val: {type: 'number', default: -1.0}
       },
       init: function () {
         this.arrows = [];
         this.offsets = []; 
         
-        this.bDir = new THREE.Vector3();
+        this.charge0Sphere = document.getElementById('charge0-sphere');
+        this.charge1Sphere = document.getElementById('charge1-sphere');
+
+        this.pos0 = new THREE.Vector3();
+        this.pos1 = new THREE.Vector3();
+        this.targetPos = new THREE.Vector3();
+        this.e0 = new THREE.Vector3();
+        this.e1 = new THREE.Vector3();
+        this.eTotal = new THREE.Vector3();
         this.colorObj = new THREE.Color();
 
-        const radii = [0.6, 1.2]; 
-        const heights = [0.4, 1.0, 1.6]; 
-        const thetaSteps = 8; 
+        const rMin = 0.5, rMax = 2.0, rSteps = 3;
+        const thetaSteps = 6, phiSteps = 12;
 
-        heights.forEach(y => {
-          radii.forEach(r => {
-            for (let j = 0; j < thetaSteps; j++) {
-              const theta = (Math.PI * 2) * (j / thetaSteps);
-              const x = r * Math.cos(theta);
-              const z = r * Math.sin(theta);
-              
-              this.offsets.push({ x: x, y: y, z: z, r: r });
-              
-              const arrow = new THREE.ArrowHelper(
-                new THREE.Vector3(0,1,0), 
-                new THREE.Vector3(x, y, z), 
-                0.1, 0xffff00, 0.1, 0.1
-              );
-              this.el.object3D.add(arrow);
-              this.arrows.push(arrow);
+        const generateOffsets = (ownerIndex) => {
+          for (let i = 0; i <= rSteps; i++) {
+            const r = rMin + (rMax - rMin) * (i / rSteps);
+            for (let j = 0; j <= thetaSteps; j++) {
+              const theta = Math.PI * (j / thetaSteps);
+              const currentPhiSteps = (j === 0 || j === thetaSteps) ? 1 : phiSteps;
+
+              for (let k = 0; k < currentPhiSteps; k++) {
+                const phi = (Math.PI * 2) * (k / currentPhiSteps);
+                const x = r * Math.sin(theta) * Math.cos(phi);
+                const y = r * Math.cos(theta);
+                const z = r * Math.sin(theta) * Math.sin(phi);
+                
+                this.offsets.push({ vec: new THREE.Vector3(x, y, z), owner: ownerIndex });
+                
+                const arrow = new THREE.ArrowHelper(new THREE.Vector3(0,1,0), new THREE.Vector3(0,0,0), 0.1, 0xffffff, 0.1, 0.1);
+                this.el.object3D.add(arrow);
+                this.arrows.push(arrow);
+              }
             }
-          });
-        });
+          }
+        };
+
+        generateOffsets(0); 
+        generateOffsets(1); 
       },
 
       tick: function () {
-        const I = this.data.currentVal;
+        const val0 = this.data.charge0Val;
+        const val1 = this.data.charge1Val;
 
-        if (I === 0) {
-          for (let i = 0; i < this.arrows.length; i++) {
-            this.arrows[i].visible = false;
-          }
-          return;
-        }
+        this.charge0Sphere.object3D.getWorldPosition(this.pos0);
+        this.charge1Sphere.object3D.getWorldPosition(this.pos1);
 
         for (let i = 0; i < this.arrows.length; i++) {
           const arrow = this.arrows[i];
           const offset = this.offsets[i];
-          
+
+          if ((offset.owner === 0 && val0 === 0) || 
+              (offset.owner === 1 && val1 === 0)) {
+            arrow.visible = false;
+            continue;
+          }
+
           arrow.visible = true;
-
-          // ビオ・サバールの法則 B ∝ (I × r)
-          this.bDir.set(I * offset.z, 0, -I * offset.x);
-          const mag = Math.abs(I) / offset.r;
           
-          const arrowLength = Math.min(mag * 0.3, 0.5);
-          const colorIntensity = Math.min(mag * 0.5, 1.0);
-          this.colorObj.setHSL(0.15, 1.0, 0.2 + colorIntensity * 0.3);
+          const basePos = offset.owner === 0 ? this.pos0 : this.pos1;
+          this.targetPos.copy(basePos).add(offset.vec);
 
-          this.bDir.normalize();
+          this.eTotal.set(0, 0, 0);
+
+          if (val0 !== 0) {
+            this.e0.subVectors(this.targetPos, this.pos0);
+            const distSq = this.e0.lengthSq();
+            if (distSq > 0.01) {
+              const mag = val0 / distSq;
+              this.e0.normalize().multiplyScalar(mag);
+              this.eTotal.add(this.e0);
+            }
+          }
+
+          if (val1 !== 0) {
+            this.e1.subVectors(this.targetPos, this.pos1);
+            const distSq = this.e1.lengthSq();
+            if (distSq > 0.01) {
+              const mag = val1 / distSq;
+              this.e1.normalize().multiplyScalar(mag);
+              this.eTotal.add(this.e1);
+            }
+          }
+
+          const totalMag = this.eTotal.length();
+          if (totalMag < 0.01) {
+            arrow.visible = false;
+            continue;
+          }
+
+          const arrowLength = Math.min(totalMag * 0.5, 0.4);
+          const colorIntensity = Math.min(totalMag, 1.0);
+          this.colorObj.setHSL((1.0 - colorIntensity) * 0.66, 1.0, 0.5);
+
+          this.eTotal.normalize();
           
-          arrow.setDirection(this.bDir);
+          arrow.position.copy(this.targetPos);
+          arrow.setDirection(this.eTotal);
           arrow.setLength(arrowLength, arrowLength * 0.3, arrowLength * 0.3);
           arrow.setColor(this.colorObj.getHex());
         }
       }
     });
 
-    // 3. UIの連動
+    // UIの連動
     document.addEventListener('DOMContentLoaded', () => {
-      const fieldEntity = document.getElementById('magnetic-field-manager');
-      const currentSlider = document.getElementById('current-slider');
-      const currentLabel = document.getElementById('current-label');
+      const fieldEntity = document.getElementById('electric-field-manager');
       
-      const wire = document.getElementById('wire-cylinder');
-      const currentArrowUp = document.getElementById('current-arrow-up');
-      const currentArrowDown = document.getElementById('current-arrow-down');
+      const updateCharge = (sliderId, labelId, sphereId, attrName) => {
+        const slider = document.getElementById(sliderId);
+        const label = document.getElementById(labelId);
+        const sphere = document.getElementById(sphereId);
 
-      currentSlider.addEventListener('input', (e) => {
-        const val = parseFloat(e.target.value);
-        currentLabel.textContent = val.toFixed(1) + " A";
-        fieldEntity.setAttribute('magnetic-field-straight', 'currentVal', val);
+        slider.addEventListener('input', (e) => {
+          const val = parseFloat(e.target.value);
+          label.textContent = val.toFixed(1);
+          fieldEntity.setAttribute('superposed-field', attrName, val);
 
-        if (val > 0) {
-          wire.setAttribute('color', '#FF6666');
-          currentArrowUp.setAttribute('visible', 'true');
-          currentArrowDown.setAttribute('visible', 'false');
-          currentArrowUp.setAttribute('scale', `${1 + val*0.2} ${1 + val*0.2} ${1 + val*0.2}`);
-        } else if (val < 0) {
-          wire.setAttribute('color', '#6666FF');
-          currentArrowUp.setAttribute('visible', 'false');
-          currentArrowDown.setAttribute('visible', 'true');
-          currentArrowDown.setAttribute('scale', `${1 - val*0.2} ${1 - val*0.2} ${1 - val*0.2}`);
-        } else {
-          wire.setAttribute('color', '#AAAAAA');
-          currentArrowUp.setAttribute('visible', 'false');
-          currentArrowDown.setAttribute('visible', 'false');
-        }
+          if (val > 0) sphere.setAttribute('color', '#FF3333');
+          else if (val < 0) sphere.setAttribute('color', '#3333FF');
+          else sphere.setAttribute('color', '#888888');
+        });
+      };
+
+      updateCharge('charge0-slider', 'charge0-label', 'charge0-sphere', 'charge0Val');
+      updateCharge('charge1-slider', 'charge1-label', 'charge1-sphere', 'charge1Val');
+
+      const distSlider = document.getElementById('distance-slider');
+      const distLabel = document.getElementById('distance-label');
+      const sphere0 = document.getElementById('charge0-sphere');
+      const sphere1 = document.getElementById('charge1-sphere');
+
+      distSlider.addEventListener('input', (e) => {
+        const dist = parseFloat(e.target.value);
+        distLabel.textContent = dist.toFixed(1);
+        
+        sphere0.setAttribute('position', `${-dist / 2} 1.0 0`);
+        sphere1.setAttribute('position', `${dist / 2} 1.0 0`);
       });
     });
   </script>
 </head>
 <body style="margin: 0; overflow: hidden; background-color: #000;">
   
+  <!-- タイトル表示 -->
   <div style="position: absolute; top: 10px; left: 10px; z-index: 10; pointer-events: none;">
     <div style="padding: 6px 12px; font-size: 14px; font-weight: bold; background-color: rgba(0, 0, 0, 0.7); color: white; border: 1px solid white; border-radius: 6px;">
-      直線電流が作る磁場
+      電場の重ね合わせ
     </div>
   </div>
 
+  <!-- スライダーUI -->
   <div style="position: absolute; top: 50px; left: 10px; display: flex; flex-direction: column; gap: 8px; z-index: 10; width: calc(100vw - 20px); max-width: 280px;">
     
+    <!-- 電荷A -->
     <div style="display: flex; align-items: center; background: rgba(0,0,0,0.6); padding: 6px 12px; border-radius: 8px;">
-      <span style="color: white; font-weight: bold; font-size: 13px; width: 85px; white-space: nowrap;">電流 I : <span id="current-label">1.0 A</span></span>
-      <input type="range" id="current-slider" min="-3.0" max="3.0" step="0.1" value="1.0" style="flex-grow: 1; margin-left: 5px;">
+      <span style="color: white; font-weight: bold; font-size: 13px; width: 85px; white-space: nowrap;">電荷A: <span id="charge0-label">1.0</span></span>
+      <input type="range" id="charge0-slider" min="-3.0" max="3.0" step="0.1" value="1.0" style="flex-grow: 1; margin-left: 5px;">
     </div>
-    
-    <div style="background: rgba(0,0,0,0.4); padding: 6px 10px; border-radius: 6px; margin-top: 5px;">
-      <span style="color: #ddd; font-size: 11px;">※プラスは上向き(赤)、マイナスは下向き(青)の電流です。右ねじの法則を観察してみましょう。</span>
+
+    <!-- 電荷B -->
+    <div style="display: flex; align-items: center; background: rgba(0,0,0,0.6); padding: 6px 12px; border-radius: 8px;">
+      <span style="color: white; font-weight: bold; font-size: 13px; width: 85px; white-space: nowrap;">電荷B: <span id="charge1-label">-1.0</span></span>
+      <input type="range" id="charge1-slider" min="-3.0" max="3.0" step="0.1" value="-1.0" style="flex-grow: 1; margin-left: 5px;">
+    </div>
+
+    <!-- 距離 -->
+    <div style="display: flex; align-items: center; background: rgba(255,255,255,0.25); padding: 6px 12px; border-radius: 8px;">
+      <span style="color: white; font-weight: bold; font-size: 13px; width: 85px; white-space: nowrap;">距離: <span id="distance-label">1.5</span></span>
+      <input type="range" id="distance-slider" min="0.5" max="3.0" step="0.1" value="1.5" style="flex-grow: 1; margin-left: 5px;">
     </div>
 
   </div>
@@ -183,21 +242,13 @@
 
     <a-entity camera></a-entity>
 
+    <!-- ★ hideDelay: 1500 を追加 -->
     <a-entity id="system-container" smooth-follower="target: #marker-0; lerpAmount: 0.15; hideDelay: 1500">
-      
-      <a-cylinder id="wire-cylinder" position="0 1.0 0" radius="0.05" height="3" color="#FF6666" opacity="0.9"></a-cylinder>
-      
-      <a-entity id="current-arrow-up" position="0 2.6 0" visible="true">
-        <a-cone position="0 0 0" radius-bottom="0.15" height="0.4" color="#FF3333"></a-cone>
-      </a-entity>
-
-      <a-entity id="current-arrow-down" position="0 -0.6 0" visible="false" rotation="180 0 0">
-        <a-cone position="0 0 0" radius-bottom="0.15" height="0.4" color="#3333FF"></a-cone>
-      </a-entity>
-
-      <a-entity id="magnetic-field-manager" magnetic-field-straight="currentVal: 1.0"></a-entity>
-
+      <a-sphere id="charge0-sphere" position="-0.75 1.0 0" radius="0.1" color="#FF3333" opacity="0.9"></a-sphere>
+      <a-sphere id="charge1-sphere" position="0.75 1.0 0" radius="0.1" color="#3333FF" opacity="0.9"></a-sphere>
     </a-entity>
+
+    <a-entity id="electric-field-manager" superposed-field="charge0Val: 1.0; charge1Val: -1.0"></a-entity>
 
   </a-scene>
 </body>
