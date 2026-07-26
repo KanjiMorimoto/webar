@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>AR物理実験室 - 電磁誘導とレンツの法則</title>
+  <title>AR物理実験室 - 磁力線の観察</title>
   
   <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
   <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
 
   <script>
-    // 1. マーカー追従（猶予時間タイマー付き）
+    // 1. マーカー追従（猶予時間タイマー付き安定版）
     AFRAME.registerComponent('smooth-follower', {
       schema: {
         target: {type: 'selector'},
@@ -48,195 +48,177 @@
       }
     });
 
-    // ★新規: ばね(らせん)を描画するコンポーネント
-    AFRAME.registerComponent('spring-coil', {
+    // 2. 磁場（磁力線）の計算・描画コンポーネント
+    AFRAME.registerComponent('magnetic-field-lines', {
       schema: {
-        radius: {type: 'number', default: 0.5},
-        tube: {type: 'number', default: 0.03},
-        turns: {type: 'number', default: 5},
-        height: {type: 'number', default: 0.8},
-        color: {type: 'color', default: '#B87333'}
+        poleAVal: {type: 'number', default: 1.0},
+        poleBVal: {type: 'number', default: -1.0}
       },
       init: function () {
-        const d = this.data;
-        // らせん軌道の数学的定義
-        class HelixCurve extends THREE.Curve {
-          getPoint(t, optionalTarget = new THREE.Vector3()) {
-            const angle = t * Math.PI * 2 * d.turns;
-            const x = d.radius * Math.cos(angle);
-            const z = -d.radius * Math.sin(angle);
-            const y = (t - 0.5) * d.height; // 中心を y=0 とする
-            return optionalTarget.set(x, y, z);
-          }
-        }
-        const path = new HelixCurve();
-        // パスに沿ってチューブ(筒)を生成
-        const geometry = new THREE.TubeGeometry(path, d.turns * 32, d.tube, 12, false);
-        const material = new THREE.MeshStandardMaterial({
-          color: d.color,
-          roughness: 0.6,
-          metalness: 0.5
-        });
-        const mesh = new THREE.Mesh(geometry, material);
-        this.el.setObject3D('mesh', mesh);
-      }
-    });
-
-    // ★新規: 曲がった矢印(円弧+円錐)を描画するコンポーネント
-    AFRAME.registerComponent('curved-arrow', {
-      schema: {
-        radius: {type: 'number', default: 0.65}, // コイルより少し外側
-        angleStart: {type: 'number', default: 0},
-        angleLength: {type: 'number', default: 1.047}, // 60度
-        color: {type: 'color', default: '#FFFF00'},
-        thickness: {type: 'number', default: 0.025},
-        headSize: {type: 'number', default: 0.09}
-      },
-      init: function() {
-        const d = this.data;
-        // 円弧軌道の定義
-        class ArcCurve extends THREE.Curve {
-          getPoint(t, optionalTarget = new THREE.Vector3()) {
-            const angle = d.angleStart + t * d.angleLength;
-            return optionalTarget.set(d.radius * Math.cos(angle), 0, -d.radius * Math.sin(angle));
-          }
-        }
-        const path = new ArcCurve();
-        const tubeGeo = new THREE.TubeGeometry(path, 16, d.thickness, 8, false);
-        const mat = new THREE.MeshBasicMaterial({color: d.color, transparent: true, opacity: 0.9});
-        const tube = new THREE.Mesh(tubeGeo, mat);
-
-        // 先端の円錐(矢印の頭)
-        const coneGeo = new THREE.ConeGeometry(d.headSize, d.headSize * 2.5, 16);
-        const cone = new THREE.Mesh(coneGeo, mat);
-        const endAngle = d.angleStart + d.angleLength;
-        cone.position.set(d.radius * Math.cos(endAngle), 0, -d.radius * Math.sin(endAngle));
-
-        // 矢印の頭を軌道の接線方向に向ける計算
-        const dir = (d.angleLength > 0) ? 1 : -1;
-        const tangent = new THREE.Vector3(-Math.sin(endAngle)*dir, 0, -Math.cos(endAngle)*dir);
-        const quaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), tangent.normalize());
-        cone.quaternion.copy(quaternion);
-
-        // チューブと円錐をグループ化してセット
-        const group = new THREE.Group();
-        group.add(tube);
-        group.add(cone);
-        this.el.setObject3D('mesh', group);
-      }
-    });
-
-    // 2. レンツの法則の計算・描画コンポーネント
-    AFRAME.registerComponent('lenz-system', {
-      schema: {
-        height: {type: 'number', default: 2.0},
-        pole: {type: 'number', default: 1} // 1: N極が下, -1: S極が下
-      },
-      init: function () {
-        this.prevHeight = this.data.height;
-        this.smoothedVelocity = 0;
-        this.visualB = 0; 
+        this.arrows = [];
+        this.offsets = []; 
         
-        this.magnetEntity = document.getElementById('magnet-entity');
-        this.magnetBottom = document.getElementById('magnet-bottom');
-        this.magnetTop = document.getElementById('magnet-top');
-        this.magnetBottomText = document.getElementById('magnet-bottom-text');
-        this.magnetTopText = document.getElementById('magnet-top-text');
-        
-        this.inducedBArrow = document.getElementById('induced-b-arrow');
-        this.coilArrowsCCW = document.getElementById('coil-arrows-ccw'); // 反時計回り(曲がった矢印)
-        this.coilArrowsCW = document.getElementById('coil-arrows-cw');   // 時計回り(曲がった矢印)
-      },
-      tick: function (time, timeDelta) {
-        if (timeDelta === 0) return;
+        this.poleASphere = document.getElementById('poleA-sphere');
+        this.poleBSphere = document.getElementById('poleB-sphere');
+        this.systemContainer = document.getElementById('system-container');
 
-        // 磁石の位置と極性の更新
-        this.magnetEntity.object3D.position.y = this.data.height;
+        this.posA = new THREE.Vector3();
+        this.posB = new THREE.Vector3();
+        this.targetPos = new THREE.Vector3();
+        this.bA = new THREE.Vector3();
+        this.bB = new THREE.Vector3();
+        this.bTotal = new THREE.Vector3();
+        this.colorObj = new THREE.Color();
 
-        if (this.data.pole === 1) { 
-          this.magnetBottom.setAttribute('color', '#FF3333');
-          this.magnetBottomText.setAttribute('value', 'N');
-          this.magnetTop.setAttribute('color', '#3333FF');
-          this.magnetTopText.setAttribute('value', 'S');
-        } else { 
-          this.magnetBottom.setAttribute('color', '#3333FF');
-          this.magnetBottomText.setAttribute('value', 'S');
-          this.magnetTop.setAttribute('color', '#FF3333');
-          this.magnetTopText.setAttribute('value', 'N');
-        }
+        const rMin = 0.5, rMax = 2.0, rSteps = 3;
+        const thetaSteps = 6, phiSteps = 12;
 
-        // 速度と誘導磁場の計算
-        const dt = timeDelta / 1000.0; 
-        const v = (this.data.height - this.prevHeight) / dt;
-        this.prevHeight = this.data.height;
+        const generateOffsets = (ownerIndex) => {
+          for (let i = 0; i <= rSteps; i++) {
+            const r = rMin + (rMax - rMin) * (i / rSteps);
+            for (let j = 0; j <= thetaSteps; j++) {
+              const theta = Math.PI * (j / thetaSteps);
+              const currentPhiSteps = (j === 0 || j === thetaSteps) ? 1 : phiSteps;
 
-        this.smoothedVelocity = this.smoothedVelocity * 0.7 + v * 0.3;
-
-        const y = Math.max(this.data.height, 0.4); 
-        const rawInducedB = -1 * this.data.pole * this.smoothedVelocity / (y * y);
-
-        // ふんわり消える残像効果
-        this.visualB = this.visualB * 0.85 + rawInducedB * 0.15;
-
-        // 描画の更新
-        if (Math.abs(this.visualB) < 0.05) {
-          this.inducedBArrow.setAttribute('visible', 'false');
-          this.coilArrowsCCW.setAttribute('visible', 'false');
-          this.coilArrowsCW.setAttribute('visible', 'false');
-        } else {
-          this.inducedBArrow.setAttribute('visible', 'true');
-          
-          const dir = this.visualB > 0 ? 1 : -1; 
-          const rotX = dir > 0 ? 0 : 180;
-          this.inducedBArrow.setAttribute('rotation', `${rotX} 0 0`);
-          
-          // 誘導磁場(水色)のスケール
-          const magB = Math.min(Math.abs(this.visualB) * 1.5, 2.0); 
-          this.inducedBArrow.setAttribute('scale', `${magB} ${magB} ${magB}`);
-
-          // 電流矢印(黄色)のスケール調整（大きくなりすぎないように調整）
-          const scaleI = 0.8 + Math.min(Math.abs(this.visualB), 1.5) * 0.3;
-
-          if (dir > 0) {
-            this.coilArrowsCCW.setAttribute('visible', 'true');
-            this.coilArrowsCW.setAttribute('visible', 'false');
-            this.coilArrowsCCW.setAttribute('scale', `${scaleI} ${scaleI} ${scaleI}`);
-          } else {
-            this.coilArrowsCCW.setAttribute('visible', 'false');
-            this.coilArrowsCW.setAttribute('visible', 'true');
-            this.coilArrowsCW.setAttribute('scale', `${scaleI} ${scaleI} ${scaleI}`);
+              for (let k = 0; k < currentPhiSteps; k++) {
+                const phi = (Math.PI * 2) * (k / currentPhiSteps);
+                const x = r * Math.sin(theta) * Math.cos(phi);
+                const y = r * Math.cos(theta);
+                const z = r * Math.sin(theta) * Math.sin(phi);
+                
+                this.offsets.push({ vec: new THREE.Vector3(x, y, z), owner: ownerIndex });
+                
+                const arrow = new THREE.ArrowHelper(new THREE.Vector3(0,1,0), new THREE.Vector3(0,0,0), 0.1, 0x00FFFF, 0.1, 0.1);
+                this.el.object3D.add(arrow);
+                this.arrows.push(arrow);
+              }
+            }
           }
+        };
+
+        generateOffsets(0); 
+        generateOffsets(1); 
+      },
+
+      tick: function () {
+        // コンテナが非表示なら矢印も計算ストップ・非表示
+        if (!this.systemContainer.object3D.visible) {
+          this.el.object3D.visible = false;
+          return;
+        }
+        this.el.object3D.visible = true;
+
+        const valA = this.data.poleAVal;
+        const valB = this.data.poleBVal;
+
+        this.poleASphere.object3D.getWorldPosition(this.posA);
+        this.poleBSphere.object3D.getWorldPosition(this.posB);
+
+        for (let i = 0; i < this.arrows.length; i++) {
+          const arrow = this.arrows[i];
+          const offset = this.offsets[i];
+
+          // 所属する磁極の強さが0なら非表示
+          if ((offset.owner === 0 && valA === 0) || 
+              (offset.owner === 1 && valB === 0)) {
+            arrow.visible = false;
+            continue;
+          }
+
+          arrow.visible = true;
+          
+          const basePos = offset.owner === 0 ? this.posA : this.posB;
+          this.targetPos.copy(basePos).add(offset.vec);
+
+          this.bTotal.set(0, 0, 0);
+
+          // 磁極Aからの磁場
+          if (valA !== 0) {
+            this.bA.subVectors(this.targetPos, this.posA);
+            const distSq = this.bA.lengthSq();
+            if (distSq > 0.01) {
+              const mag = valA / distSq;
+              this.bA.normalize().multiplyScalar(mag);
+              this.bTotal.add(this.bA);
+            }
+          }
+
+          // 磁極Bからの磁場
+          if (valB !== 0) {
+            this.bB.subVectors(this.targetPos, this.posB);
+            const distSq = this.bB.lengthSq();
+            if (distSq > 0.01) {
+              const mag = valB / distSq;
+              this.bB.normalize().multiplyScalar(mag);
+              this.bTotal.add(this.bB);
+            }
+          }
+
+          const totalMag = this.bTotal.length();
+          if (totalMag < 0.01) {
+            arrow.visible = false;
+            continue;
+          }
+
+          const arrowLength = Math.min(totalMag * 0.5, 0.4);
+          
+          // 磁力線は水色系(Cyanベース)で表現。強いほど明るい。
+          const colorIntensity = Math.min(totalMag, 1.0);
+          this.colorObj.setHSL(0.5, 1.0, 0.2 + colorIntensity * 0.4);
+
+          this.bTotal.normalize();
+          
+          arrow.position.copy(this.targetPos);
+          arrow.setDirection(this.bTotal);
+          arrow.setLength(arrowLength, arrowLength * 0.3, arrowLength * 0.3);
+          arrow.setColor(this.colorObj.getHex());
         }
       }
     });
 
     // 3. UIの連動
     document.addEventListener('DOMContentLoaded', () => {
-      const systemEntity = document.getElementById('lenz-manager');
-      const heightSlider = document.getElementById('height-slider');
+      const fieldEntity = document.getElementById('magnetic-field-manager');
       
-      heightSlider.addEventListener('input', (e) => {
-        const val = parseFloat(e.target.value);
-        systemEntity.setAttribute('lenz-system', 'height', val);
-      });
+      const updatePole = (sliderId, labelId, sphereId, textId, attrName) => {
+        const slider = document.getElementById(sliderId);
+        const label = document.getElementById(labelId);
+        const sphere = document.getElementById(sphereId);
+        const textObj = document.getElementById(textId);
 
-      const poleBtn = document.getElementById('pole-btn');
-      let currentPole = 1;
+        slider.addEventListener('input', (e) => {
+          const val = parseFloat(e.target.value);
+          label.textContent = val.toFixed(1);
+          fieldEntity.setAttribute('magnetic-field-lines', attrName, val);
 
-      poleBtn.addEventListener('click', () => {
-        currentPole *= -1;
-        systemEntity.setAttribute('lenz-system', 'pole', currentPole);
+          // 正ならN極(赤)、負ならS極(青)、0なら無極(グレー)
+          if (val > 0) {
+            sphere.setAttribute('color', '#FF3333');
+            textObj.setAttribute('value', 'N');
+          } else if (val < 0) {
+            sphere.setAttribute('color', '#3333FF');
+            textObj.setAttribute('value', 'S');
+          } else {
+            sphere.setAttribute('color', '#888888');
+            textObj.setAttribute('value', '');
+          }
+        });
+      };
+
+      updatePole('poleA-slider', 'poleA-label', 'poleA-sphere', 'poleA-text', 'poleAVal');
+      updatePole('poleB-slider', 'poleB-label', 'poleB-sphere', 'poleB-text', 'poleBVal');
+
+      const distSlider = document.getElementById('distance-slider');
+      const distLabel = document.getElementById('distance-label');
+      const sphereA = document.getElementById('poleA-sphere');
+      const sphereB = document.getElementById('poleB-sphere');
+
+      distSlider.addEventListener('input', (e) => {
+        const dist = parseFloat(e.target.value);
+        distLabel.textContent = dist.toFixed(1);
         
-        if(currentPole === 1) {
-          poleBtn.textContent = '極性を反転（現在：N極が下）';
-          poleBtn.style.backgroundColor = 'rgba(255, 51, 51, 0.7)';
-        } else {
-          poleBtn.textContent = '極性を反転（現在：S極が下）';
-          poleBtn.style.backgroundColor = 'rgba(51, 51, 255, 0.7)';
-        }
-        
-        systemEntity.components['lenz-system'].smoothedVelocity = 0;
-        systemEntity.components['lenz-system'].visualB = 0;
+        sphereA.setAttribute('position', `${-dist / 2} 1.0 0`);
+        sphereB.setAttribute('position', `${dist / 2} 1.0 0`);
       });
     });
   </script>
@@ -245,23 +227,29 @@
   
   <div style="position: absolute; top: 10px; left: 10px; z-index: 10; pointer-events: none;">
     <div style="padding: 6px 12px; font-size: 14px; font-weight: bold; background-color: rgba(0, 0, 0, 0.7); color: white; border: 1px solid white; border-radius: 6px;">
-      電磁誘導とレンツの法則
+      磁力線の観察
     </div>
   </div>
 
-  <div style="position: absolute; top: 50px; left: 10px; display: flex; flex-direction: column; gap: 12px; z-index: 10; width: calc(100vw - 20px); max-width: 280px;">
+  <div style="position: absolute; top: 50px; left: 10px; display: flex; flex-direction: column; gap: 8px; z-index: 10; width: calc(100vw - 20px); max-width: 280px;">
     
-    <div style="display: flex; align-items: center; background: rgba(0,0,0,0.6); padding: 8px 12px; border-radius: 8px;">
-      <span style="color: white; font-weight: bold; font-size: 13px; width: 70px; white-space: nowrap;">磁石を動かす</span>
-      <input type="range" id="height-slider" min="0.4" max="3.0" step="0.05" value="2.0" style="flex-grow: 1; margin-left: 5px;">
+    <div style="display: flex; align-items: center; background: rgba(0,0,0,0.6); padding: 6px 12px; border-radius: 8px;">
+      <span style="color: white; font-weight: bold; font-size: 13px; width: 85px; white-space: nowrap;">磁極A: <span id="poleA-label">1.0</span></span>
+      <input type="range" id="poleA-slider" min="-3.0" max="3.0" step="0.1" value="1.0" style="flex-grow: 1; margin-left: 5px;">
     </div>
 
-    <button id="pole-btn" style="padding: 8px 12px; font-size: 13px; font-weight: bold; color: white; background-color: rgba(255, 51, 51, 0.7); border: 1px solid white; border-radius: 8px; cursor: pointer; text-align: center;">
-      極性を反転（現在：N極が下）
-    </button>
+    <div style="display: flex; align-items: center; background: rgba(0,0,0,0.6); padding: 6px 12px; border-radius: 8px;">
+      <span style="color: white; font-weight: bold; font-size: 13px; width: 85px; white-space: nowrap;">磁極B: <span id="poleB-label">-1.0</span></span>
+      <input type="range" id="poleB-slider" min="-3.0" max="3.0" step="0.1" value="-1.0" style="flex-grow: 1; margin-left: 5px;">
+    </div>
 
-    <div style="background: rgba(0,0,0,0.4); padding: 6px 10px; border-radius: 6px;">
-      <span style="color: #ddd; font-size: 11px;">※スライダーを素早く動かして磁石を近づけたり遠ざけたりすると、変化を妨げる向きに電流(黄)が発生します。</span>
+    <div style="display: flex; align-items: center; background: rgba(255,255,255,0.25); padding: 6px 12px; border-radius: 8px;">
+      <span style="color: white; font-weight: bold; font-size: 13px; width: 85px; white-space: nowrap;">極間距離: <span id="distance-label">1.5</span></span>
+      <input type="range" id="distance-slider" min="0.5" max="3.0" step="0.1" value="1.5" style="flex-grow: 1; margin-left: 5px;">
+    </div>
+
+    <div style="background: rgba(0,0,0,0.4); padding: 6px 10px; border-radius: 6px; margin-top: 5px;">
+      <span style="color: #ddd; font-size: 11px;">※プラスはN極(赤)、マイナスはS極(青)として、長い棒磁石の先端が作る磁場をモデル化しています。</span>
     </div>
 
   </div>
@@ -274,47 +262,20 @@
 
     <a-entity id="system-container" smooth-follower="target: #marker-0; lerpAmount: 0.15; hideDelay: 1500">
       
-      <!-- ★修正: 独立したトーラスを削除し、動的生成の「ばねコンポーネント」を配置 -->
-      <!-- 中心をY=0.4に置き、Y=0.0 〜 Y=0.8 まで広がるコイルになります -->
-      <a-entity position="0 0.4 0" spring-coil="radius: 0.5; turns: 5; height: 0.8; tube: 0.025"></a-entity>
+      <!-- 磁極A (初期値: +1.0 = N極) -->
+      <a-sphere id="poleA-sphere" position="-0.75 1.0 0" radius="0.1" color="#FF3333" opacity="0.9">
+        <a-text id="poleA-text" value="N" position="0 0.15 0" align="center" color="white" scale="0.6 0.6 0.6"></a-text>
+      </a-sphere>
+      
+      <!-- 磁極B (初期値: -1.0 = S極) -->
+      <a-sphere id="poleB-sphere" position="0.75 1.0 0" radius="0.1" color="#3333FF" opacity="0.9">
+        <a-text id="poleB-text" value="S" position="0 0.15 0" align="center" color="white" scale="0.6 0.6 0.6"></a-text>
+      </a-sphere>
 
-      <a-entity id="lenz-manager" lenz-system="height: 2.0; pole: 1">
-        
-        <!-- 動く磁石 -->
-        <a-entity id="magnet-entity" position="0 2.0 0">
-          <a-box id="magnet-top" position="0 0.4 0" width="0.4" height="0.8" depth="0.4" color="#3333FF">
-            <a-text id="magnet-top-text" value="S" position="0 0 0.21" align="center" color="white" scale="1.5 1.5 1.5"></a-text>
-          </a-box>
-          <a-box id="magnet-bottom" position="0 -0.4 0" width="0.4" height="0.8" depth="0.4" color="#FF3333">
-            <a-text id="magnet-bottom-text" value="N" position="0 0 0.21" align="center" color="white" scale="1.5 1.5 1.5"></a-text>
-          </a-box>
-        </a-entity>
-
-        <!-- 誘導磁場ベクトル (水色) -->
-        <a-entity id="induced-b-arrow" position="0 0.4 0" visible="false">
-          <a-cylinder position="0 0.4 0" radius="0.05" height="0.8" color="#00FFFF" opacity="0.8"></a-cylinder>
-          <a-cone position="0 0.9 0" radius-bottom="0.15" height="0.3" color="#00FFFF" opacity="0.8"></a-cone>
-        </a-entity>
-
-        <!-- ★修正: 誘導電流ベクトル (反時計回り：CCW) を「曲がった矢印」に変更 -->
-        <!-- ばねの中心(Y=0.4)の周囲4箇所に配置し、ひとつの渦のように見せます -->
-        <a-entity id="coil-arrows-ccw" position="0 0.4 0" visible="false">
-          <a-entity curved-arrow="angleStart: 0; angleLength: 1.047"></a-entity>
-          <a-entity curved-arrow="angleStart: 1.5708; angleLength: 1.047"></a-entity>
-          <a-entity curved-arrow="angleStart: 3.1416; angleLength: 1.047"></a-entity>
-          <a-entity curved-arrow="angleStart: 4.7124; angleLength: 1.047"></a-entity>
-        </a-entity>
-
-        <!-- ★修正: 誘導電流ベクトル (時計回り：CW) を「曲がった矢印」に変更 -->
-        <a-entity id="coil-arrows-cw" position="0 0.4 0" visible="false">
-          <a-entity curved-arrow="angleStart: 0; angleLength: -1.047"></a-entity>
-          <a-entity curved-arrow="angleStart: 1.5708; angleLength: -1.047"></a-entity>
-          <a-entity curved-arrow="angleStart: 3.1416; angleLength: -1.047"></a-entity>
-          <a-entity curved-arrow="angleStart: 4.7124; angleLength: -1.047"></a-entity>
-        </a-entity>
-
-      </a-entity>
     </a-entity>
+
+    <!-- 磁力線の描画マネージャー -->
+    <a-entity id="magnetic-field-manager" magnetic-field-lines="poleAVal: 1.0; poleBVal: -1.0"></a-entity>
 
   </a-scene>
 </body>
