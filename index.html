@@ -9,7 +9,7 @@
   <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
 
   <script>
-    // 1. マーカー追従（猶予時間タイマー付き安定版）
+    // 1. マーカー追従（猶予時間タイマー付き）
     AFRAME.registerComponent('smooth-follower', {
       schema: {
         target: {type: 'selector'},
@@ -48,6 +48,84 @@
       }
     });
 
+    // ★新規: ばね(らせん)を描画するコンポーネント
+    AFRAME.registerComponent('spring-coil', {
+      schema: {
+        radius: {type: 'number', default: 0.5},
+        tube: {type: 'number', default: 0.03},
+        turns: {type: 'number', default: 5},
+        height: {type: 'number', default: 0.8},
+        color: {type: 'color', default: '#B87333'}
+      },
+      init: function () {
+        const d = this.data;
+        // らせん軌道の数学的定義
+        class HelixCurve extends THREE.Curve {
+          getPoint(t, optionalTarget = new THREE.Vector3()) {
+            const angle = t * Math.PI * 2 * d.turns;
+            const x = d.radius * Math.cos(angle);
+            const z = -d.radius * Math.sin(angle);
+            const y = (t - 0.5) * d.height; // 中心を y=0 とする
+            return optionalTarget.set(x, y, z);
+          }
+        }
+        const path = new HelixCurve();
+        // パスに沿ってチューブ(筒)を生成
+        const geometry = new THREE.TubeGeometry(path, d.turns * 32, d.tube, 12, false);
+        const material = new THREE.MeshStandardMaterial({
+          color: d.color,
+          roughness: 0.6,
+          metalness: 0.5
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        this.el.setObject3D('mesh', mesh);
+      }
+    });
+
+    // ★新規: 曲がった矢印(円弧+円錐)を描画するコンポーネント
+    AFRAME.registerComponent('curved-arrow', {
+      schema: {
+        radius: {type: 'number', default: 0.65}, // コイルより少し外側
+        angleStart: {type: 'number', default: 0},
+        angleLength: {type: 'number', default: 1.047}, // 60度
+        color: {type: 'color', default: '#FFFF00'},
+        thickness: {type: 'number', default: 0.025},
+        headSize: {type: 'number', default: 0.09}
+      },
+      init: function() {
+        const d = this.data;
+        // 円弧軌道の定義
+        class ArcCurve extends THREE.Curve {
+          getPoint(t, optionalTarget = new THREE.Vector3()) {
+            const angle = d.angleStart + t * d.angleLength;
+            return optionalTarget.set(d.radius * Math.cos(angle), 0, -d.radius * Math.sin(angle));
+          }
+        }
+        const path = new ArcCurve();
+        const tubeGeo = new THREE.TubeGeometry(path, 16, d.thickness, 8, false);
+        const mat = new THREE.MeshBasicMaterial({color: d.color, transparent: true, opacity: 0.9});
+        const tube = new THREE.Mesh(tubeGeo, mat);
+
+        // 先端の円錐(矢印の頭)
+        const coneGeo = new THREE.ConeGeometry(d.headSize, d.headSize * 2.5, 16);
+        const cone = new THREE.Mesh(coneGeo, mat);
+        const endAngle = d.angleStart + d.angleLength;
+        cone.position.set(d.radius * Math.cos(endAngle), 0, -d.radius * Math.sin(endAngle));
+
+        // 矢印の頭を軌道の接線方向に向ける計算
+        const dir = (d.angleLength > 0) ? 1 : -1;
+        const tangent = new THREE.Vector3(-Math.sin(endAngle)*dir, 0, -Math.cos(endAngle)*dir);
+        const quaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), tangent.normalize());
+        cone.quaternion.copy(quaternion);
+
+        // チューブと円錐をグループ化してセット
+        const group = new THREE.Group();
+        group.add(tube);
+        group.add(cone);
+        this.el.setObject3D('mesh', group);
+      }
+    });
+
     // 2. レンツの法則の計算・描画コンポーネント
     AFRAME.registerComponent('lenz-system', {
       schema: {
@@ -57,9 +135,8 @@
       init: function () {
         this.prevHeight = this.data.height;
         this.smoothedVelocity = 0;
-        this.visualB = 0; // 描画用の滑らかな値
+        this.visualB = 0; 
         
-        // 描画要素の取得
         this.magnetEntity = document.getElementById('magnet-entity');
         this.magnetBottom = document.getElementById('magnet-bottom');
         this.magnetTop = document.getElementById('magnet-top');
@@ -67,72 +144,67 @@
         this.magnetTopText = document.getElementById('magnet-top-text');
         
         this.inducedBArrow = document.getElementById('induced-b-arrow');
-        this.coilArrowsCCW = document.getElementById('coil-arrows-ccw'); // 反時計回り
-        this.coilArrowsCW = document.getElementById('coil-arrows-cw');   // 時計回り
+        this.coilArrowsCCW = document.getElementById('coil-arrows-ccw'); // 反時計回り(曲がった矢印)
+        this.coilArrowsCW = document.getElementById('coil-arrows-cw');   // 時計回り(曲がった矢印)
       },
       tick: function (time, timeDelta) {
         if (timeDelta === 0) return;
 
-        // --- 磁石の物理的な位置と極性の更新 ---
+        // 磁石の位置と極性の更新
         this.magnetEntity.object3D.position.y = this.data.height;
 
-        if (this.data.pole === 1) { // N極が下
+        if (this.data.pole === 1) { 
           this.magnetBottom.setAttribute('color', '#FF3333');
           this.magnetBottomText.setAttribute('value', 'N');
           this.magnetTop.setAttribute('color', '#3333FF');
           this.magnetTopText.setAttribute('value', 'S');
-        } else { // S極が下
+        } else { 
           this.magnetBottom.setAttribute('color', '#3333FF');
           this.magnetBottomText.setAttribute('value', 'S');
           this.magnetTop.setAttribute('color', '#FF3333');
           this.magnetTopText.setAttribute('value', 'N');
         }
 
-        // --- 速度(v)の計算 ---
-        const dt = timeDelta / 1000.0; // 秒単位
+        // 速度と誘導磁場の計算
+        const dt = timeDelta / 1000.0; 
         const v = (this.data.height - this.prevHeight) / dt;
         this.prevHeight = this.data.height;
 
-        // スマホのスワイプによるノイズを減らすため速度を平滑化
         this.smoothedVelocity = this.smoothedVelocity * 0.7 + v * 0.3;
 
-        // --- 誘導起電力(誘導磁場)の計算 ---
-        // 磁束(Φ) ∝ 極性(pole) / 距離(y)^2
-        // 誘導磁場(B') ∝ - dΦ/dt ∝ - pole * 速度(v) / 距離(y)^2
-        const y = Math.max(this.data.height, 0.4); // ゼロ除算防止
+        const y = Math.max(this.data.height, 0.4); 
         const rawInducedB = -1 * this.data.pole * this.smoothedVelocity / (y * y);
 
-        // 止まった時にふんわりと消える残像効果(UIUX向上)
+        // ふんわり消える残像効果
         this.visualB = this.visualB * 0.85 + rawInducedB * 0.15;
 
-        // --- 描画の更新 ---
+        // 描画の更新
         if (Math.abs(this.visualB) < 0.05) {
-          // 変化がない(止まっている)場合はすべて非表示
           this.inducedBArrow.setAttribute('visible', 'false');
           this.coilArrowsCCW.setAttribute('visible', 'false');
           this.coilArrowsCW.setAttribute('visible', 'false');
         } else {
-          // 変化がある場合は表示
           this.inducedBArrow.setAttribute('visible', 'true');
           
-          const dir = this.visualB > 0 ? 1 : -1; // 1:上向き, -1:下向き
+          const dir = this.visualB > 0 ? 1 : -1; 
           const rotX = dir > 0 ? 0 : 180;
           this.inducedBArrow.setAttribute('rotation', `${rotX} 0 0`);
           
-          // 大きさに応じて矢印をスケール (太さと長さ)
-          const mag = Math.min(Math.abs(this.visualB) * 1.5, 2.0); 
-          this.inducedBArrow.setAttribute('scale', `${mag} ${mag} ${mag}`);
+          // 誘導磁場(水色)のスケール
+          const magB = Math.min(Math.abs(this.visualB) * 1.5, 2.0); 
+          this.inducedBArrow.setAttribute('scale', `${magB} ${magB} ${magB}`);
 
-          // 右ねじの法則に基づくコイル電流の向き
-          // 誘導磁場が上向き(dir>0)なら反時計回り(CCW)、下向きなら時計回り(CW)
+          // 電流矢印(黄色)のスケール調整（大きくなりすぎないように調整）
+          const scaleI = 0.8 + Math.min(Math.abs(this.visualB), 1.5) * 0.3;
+
           if (dir > 0) {
             this.coilArrowsCCW.setAttribute('visible', 'true');
             this.coilArrowsCW.setAttribute('visible', 'false');
-            this.coilArrowsCCW.setAttribute('scale', `${mag} ${mag} ${mag}`);
+            this.coilArrowsCCW.setAttribute('scale', `${scaleI} ${scaleI} ${scaleI}`);
           } else {
             this.coilArrowsCCW.setAttribute('visible', 'false');
             this.coilArrowsCW.setAttribute('visible', 'true');
-            this.coilArrowsCW.setAttribute('scale', `${mag} ${mag} ${mag}`);
+            this.coilArrowsCW.setAttribute('scale', `${scaleI} ${scaleI} ${scaleI}`);
           }
         }
       }
@@ -141,7 +213,6 @@
     // 3. UIの連動
     document.addEventListener('DOMContentLoaded', () => {
       const systemEntity = document.getElementById('lenz-manager');
-      
       const heightSlider = document.getElementById('height-slider');
       
       heightSlider.addEventListener('input', (e) => {
@@ -150,7 +221,7 @@
       });
 
       const poleBtn = document.getElementById('pole-btn');
-      let currentPole = 1; // 初期値はN極が下
+      let currentPole = 1;
 
       poleBtn.addEventListener('click', () => {
         currentPole *= -1;
@@ -158,13 +229,12 @@
         
         if(currentPole === 1) {
           poleBtn.textContent = '極性を反転（現在：N極が下）';
-          poleBtn.style.backgroundColor = 'rgba(255, 51, 51, 0.7)'; // 赤系
+          poleBtn.style.backgroundColor = 'rgba(255, 51, 51, 0.7)';
         } else {
           poleBtn.textContent = '極性を反転（現在：S極が下）';
-          poleBtn.style.backgroundColor = 'rgba(51, 51, 255, 0.7)'; // 青系
+          poleBtn.style.backgroundColor = 'rgba(51, 51, 255, 0.7)';
         }
         
-        // 極性切り替え時の計算スパイクをリセット
         systemEntity.components['lenz-system'].smoothedVelocity = 0;
         systemEntity.components['lenz-system'].visualB = 0;
       });
@@ -179,23 +249,19 @@
     </div>
   </div>
 
-  <!-- 操作UI -->
   <div style="position: absolute; top: 50px; left: 10px; display: flex; flex-direction: column; gap: 12px; z-index: 10; width: calc(100vw - 20px); max-width: 280px;">
     
-    <!-- 磁石の高さスライダー -->
     <div style="display: flex; align-items: center; background: rgba(0,0,0,0.6); padding: 8px 12px; border-radius: 8px;">
       <span style="color: white; font-weight: bold; font-size: 13px; width: 70px; white-space: nowrap;">磁石を動かす</span>
       <input type="range" id="height-slider" min="0.4" max="3.0" step="0.05" value="2.0" style="flex-grow: 1; margin-left: 5px;">
     </div>
 
-    <!-- 極性トグルボタン -->
     <button id="pole-btn" style="padding: 8px 12px; font-size: 13px; font-weight: bold; color: white; background-color: rgba(255, 51, 51, 0.7); border: 1px solid white; border-radius: 8px; cursor: pointer; text-align: center;">
       極性を反転（現在：N極が下）
     </button>
 
-    <!-- 説明テキスト -->
     <div style="background: rgba(0,0,0,0.4); padding: 6px 10px; border-radius: 6px;">
-      <span style="color: #ddd; font-size: 11px;">※スライダーを素早く動かして磁石をコイルに近づけたり遠ざけたりすると、変化を妨げる向きに電流(黄)が発生します。</span>
+      <span style="color: #ddd; font-size: 11px;">※スライダーを素早く動かして磁石を近づけたり遠ざけたりすると、変化を妨げる向きに電流(黄)が発生します。</span>
     </div>
 
   </div>
@@ -206,17 +272,12 @@
 
     <a-entity camera></a-entity>
 
-    <!-- AR空間のルートコンテナ -->
     <a-entity id="system-container" smooth-follower="target: #marker-0; lerpAmount: 0.15; hideDelay: 1500">
       
-      <!-- コイル (銅線風のリングを3段重ねる) -->
-      <a-entity position="0 0.2 0">
-        <a-torus position="0 -0.06 0" radius="0.5" tube="0.04" color="#B87333" roughness="0.6" metalness="0.5"></a-torus>
-        <a-torus position="0 0 0" radius="0.5" tube="0.04" color="#B87333" roughness="0.6" metalness="0.5"></a-torus>
-        <a-torus position="0 0.06 0" radius="0.5" tube="0.04" color="#B87333" roughness="0.6" metalness="0.5"></a-torus>
-      </a-entity>
+      <!-- ★修正: 独立したトーラスを削除し、動的生成の「ばねコンポーネント」を配置 -->
+      <!-- 中心をY=0.4に置き、Y=0.0 〜 Y=0.8 まで広がるコイルになります -->
+      <a-entity position="0 0.4 0" spring-coil="radius: 0.5; turns: 5; height: 0.8; tube: 0.025"></a-entity>
 
-      <!-- レンツの法則 描画マネージャー -->
       <a-entity id="lenz-manager" lenz-system="height: 2.0; pole: 1">
         
         <!-- 動く磁石 -->
@@ -230,31 +291,29 @@
         </a-entity>
 
         <!-- 誘導磁場ベクトル (水色) -->
-        <a-entity id="induced-b-arrow" position="0 0.2 0" visible="false">
+        <a-entity id="induced-b-arrow" position="0 0.4 0" visible="false">
           <a-cylinder position="0 0.4 0" radius="0.05" height="0.8" color="#00FFFF" opacity="0.8"></a-cylinder>
           <a-cone position="0 0.9 0" radius-bottom="0.15" height="0.3" color="#00FFFF" opacity="0.8"></a-cone>
         </a-entity>
 
-        <!-- 誘導電流ベクトル (反時計回り：CCW) -->
-        <!-- 上から見下ろしたとき(Y軸正方向から)に反時計回りになるように配置 -->
-        <a-entity id="coil-arrows-ccw" position="0 0.2 0" visible="false">
-          <a-cone position="0.5 0 0" rotation="-90 0 0" radius-bottom="0.08" height="0.25" color="#FFFF00"></a-cone>
-          <a-cone position="-0.5 0 0" rotation="90 0 0" radius-bottom="0.08" height="0.25" color="#FFFF00"></a-cone>
-          <a-cone position="0 0 0.5" rotation="0 0 -90" radius-bottom="0.08" height="0.25" color="#FFFF00"></a-cone>
-          <a-cone position="0 0 -0.5" rotation="0 0 90" radius-bottom="0.08" height="0.25" color="#FFFF00"></a-cone>
+        <!-- ★修正: 誘導電流ベクトル (反時計回り：CCW) を「曲がった矢印」に変更 -->
+        <!-- ばねの中心(Y=0.4)の周囲4箇所に配置し、ひとつの渦のように見せます -->
+        <a-entity id="coil-arrows-ccw" position="0 0.4 0" visible="false">
+          <a-entity curved-arrow="angleStart: 0; angleLength: 1.047"></a-entity>
+          <a-entity curved-arrow="angleStart: 1.5708; angleLength: 1.047"></a-entity>
+          <a-entity curved-arrow="angleStart: 3.1416; angleLength: 1.047"></a-entity>
+          <a-entity curved-arrow="angleStart: 4.7124; angleLength: 1.047"></a-entity>
         </a-entity>
 
-        <!-- 誘導電流ベクトル (時計回り：CW) -->
-        <!-- 上から見下ろしたときに時計回りになるように配置 -->
-        <a-entity id="coil-arrows-cw" position="0 0.2 0" visible="false">
-          <a-cone position="0.5 0 0" rotation="90 0 0" radius-bottom="0.08" height="0.25" color="#FFFF00"></a-cone>
-          <a-cone position="-0.5 0 0" rotation="-90 0 0" radius-bottom="0.08" height="0.25" color="#FFFF00"></a-cone>
-          <a-cone position="0 0 0.5" rotation="0 0 90" radius-bottom="0.08" height="0.25" color="#FFFF00"></a-cone>
-          <a-cone position="0 0 -0.5" rotation="0 0 -90" radius-bottom="0.08" height="0.25" color="#FFFF00"></a-cone>
+        <!-- ★修正: 誘導電流ベクトル (時計回り：CW) を「曲がった矢印」に変更 -->
+        <a-entity id="coil-arrows-cw" position="0 0.4 0" visible="false">
+          <a-entity curved-arrow="angleStart: 0; angleLength: -1.047"></a-entity>
+          <a-entity curved-arrow="angleStart: 1.5708; angleLength: -1.047"></a-entity>
+          <a-entity curved-arrow="angleStart: 3.1416; angleLength: -1.047"></a-entity>
+          <a-entity curved-arrow="angleStart: 4.7124; angleLength: -1.047"></a-entity>
         </a-entity>
 
       </a-entity>
-
     </a-entity>
 
   </a-scene>
