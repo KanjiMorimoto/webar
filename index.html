@@ -9,12 +9,12 @@
   <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
 
   <script>
-    // 1. マーカー追従（★猶予時間タイマー付きに移植）
+    // 1. マーカー追従（猶予時間タイマー付き）
     AFRAME.registerComponent('smooth-follower', {
       schema: {
         target: {type: 'selector'},
         lerpAmount: {type: 'number', default: 0.15},
-        hideDelay: {type: 'number', default: 1500} // ★見失ってから消えるまでの時間（ミリ秒）
+        hideDelay: {type: 'number', default: 1500} // 見失ってから消えるまでの時間（ミリ秒）
       },
       init: function() {
         this.targetWorldPos = new THREE.Vector3();
@@ -63,6 +63,9 @@
         
         this.charge0Sphere = document.getElementById('charge0-sphere');
         this.charge1Sphere = document.getElementById('charge1-sphere');
+        
+        // ★修正点1: 追従コンテナの状態を監視するために取得
+        this.systemContainer = document.getElementById('system-container');
 
         this.pos0 = new THREE.Vector3();
         this.pos1 = new THREE.Vector3();
@@ -103,6 +106,15 @@
       },
 
       tick: function () {
+        // ★修正点2: コンテナが非表示(タイマー切れ)なら、矢印も非表示にして計算をスキップ
+        if (!this.systemContainer.object3D.visible) {
+          this.el.object3D.visible = false;
+          return;
+        }
+        
+        // コンテナが見えている場合は矢印マネージャーも表示
+        this.el.object3D.visible = true;
+
         const val0 = this.data.charge0Val;
         const val1 = this.data.charge1Val;
 
@@ -242,7 +254,6 @@
 
     <a-entity camera></a-entity>
 
-    <!-- ★ hideDelay: 1500 を追加 -->
     <a-entity id="system-container" smooth-follower="target: #marker-0; lerpAmount: 0.15; hideDelay: 1500">
       <a-sphere id="charge0-sphere" position="-0.75 1.0 0" radius="0.1" color="#FF3333" opacity="0.9"></a-sphere>
       <a-sphere id="charge1-sphere" position="0.75 1.0 0" radius="0.1" color="#3333FF" opacity="0.9"></a-sphere>
