@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>AR物理実験室 - 磁力線の観察</title>
+  <title>AR物理実験室 - 棒磁石の磁力線</title>
   
   <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
   <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
@@ -48,108 +48,97 @@
       }
     });
 
-    // 2. 磁場（磁力線）の計算・描画コンポーネント
-    AFRAME.registerComponent('magnetic-field-lines', {
-      schema: {
-        poleAVal: {type: 'number', default: 1.0},
-        poleBVal: {type: 'number', default: -1.0}
-      },
+    // 2. 棒磁石の磁力線の計算・描画コンポーネント
+    AFRAME.registerComponent('bar-magnet-field', {
       init: function () {
         this.arrows = [];
         this.offsets = []; 
         
-        // ★修正: 球体ではなく、棒磁石の先端(コンテナの原点)を計算の基準にする
-        this.poleAContainer = document.getElementById('poleA-container');
-        this.poleBContainer = document.getElementById('poleB-container');
+        // 参照用のEntityを取得
+        this.magnetCenter = document.getElementById('magnet-center');
+        this.poleN = document.getElementById('pole-n');
+        this.poleS = document.getElementById('pole-s');
         this.systemContainer = document.getElementById('system-container');
 
-        this.posA = new THREE.Vector3();
-        this.posB = new THREE.Vector3();
+        this.posCenter = new THREE.Vector3();
+        this.posN = new THREE.Vector3();
+        this.posS = new THREE.Vector3();
         this.targetPos = new THREE.Vector3();
-        this.bA = new THREE.Vector3();
-        this.bB = new THREE.Vector3();
+        
+        this.bN = new THREE.Vector3();
+        this.bS = new THREE.Vector3();
         this.bTotal = new THREE.Vector3();
         this.colorObj = new THREE.Color();
 
-        const rMin = 0.5, rMax = 2.0, rSteps = 3;
-        const thetaSteps = 6, phiSteps = 12;
+        // 磁石の中心からの相対位置で空間サンプリング（全方位）
+        const rMin = 0.5, rMax = 2.2, rSteps = 4;
+        const thetaSteps = 8, phiSteps = 16;
 
-        const generateOffsets = (ownerIndex) => {
-          for (let i = 0; i <= rSteps; i++) {
-            const r = rMin + (rMax - rMin) * (i / rSteps);
-            for (let j = 0; j <= thetaSteps; j++) {
-              const theta = Math.PI * (j / thetaSteps);
-              const currentPhiSteps = (j === 0 || j === thetaSteps) ? 1 : phiSteps;
+        for (let i = 0; i <= rSteps; i++) {
+          const r = rMin + (rMax - rMin) * (i / rSteps);
+          for (let j = 0; j <= thetaSteps; j++) {
+            const theta = Math.PI * (j / thetaSteps);
+            const currentPhiSteps = (j === 0 || j === thetaSteps) ? 1 : phiSteps;
 
-              for (let k = 0; k < currentPhiSteps; k++) {
-                const phi = (Math.PI * 2) * (k / currentPhiSteps);
-                const x = r * Math.sin(theta) * Math.cos(phi);
-                const y = r * Math.cos(theta);
-                const z = r * Math.sin(theta) * Math.sin(phi);
-                
-                this.offsets.push({ vec: new THREE.Vector3(x, y, z), owner: ownerIndex });
-                
-                const arrow = new THREE.ArrowHelper(new THREE.Vector3(0,1,0), new THREE.Vector3(0,0,0), 0.1, 0x00FFFF, 0.1, 0.1);
-                this.el.object3D.add(arrow);
-                this.arrows.push(arrow);
-              }
+            for (let k = 0; k < currentPhiSteps; k++) {
+              const phi = (Math.PI * 2) * (k / currentPhiSteps);
+              const x = r * Math.sin(theta) * Math.cos(phi);
+              const y = r * Math.cos(theta);
+              const z = r * Math.sin(theta) * Math.sin(phi);
+              
+              this.offsets.push(new THREE.Vector3(x, y, z));
+              
+              // 矢印の生成（色は水色系ベース）
+              const arrow = new THREE.ArrowHelper(
+                new THREE.Vector3(0,1,0), 
+                new THREE.Vector3(0,0,0), 
+                0.1, 0x00FFFF, 0.1, 0.1
+              );
+              this.el.object3D.add(arrow);
+              this.arrows.push(arrow);
             }
           }
-        };
-
-        generateOffsets(0); 
-        generateOffsets(1); 
+        }
       },
 
       tick: function () {
+        // コンテナが非表示なら矢印も計算ストップ・非表示
         if (!this.systemContainer.object3D.visible) {
           this.el.object3D.visible = false;
           return;
         }
         this.el.object3D.visible = true;
 
-        const valA = this.data.poleAVal;
-        const valB = this.data.poleBVal;
+        // 磁石の中心座標と、両極の座標を取得
+        this.magnetCenter.object3D.getWorldPosition(this.posCenter);
+        this.poleN.object3D.getWorldPosition(this.posN);
+        this.poleS.object3D.getWorldPosition(this.posS);
 
-        // 棒磁石の「先端（コンテナの原点）」の座標を取得
-        this.poleAContainer.object3D.getWorldPosition(this.posA);
-        this.poleBContainer.object3D.getWorldPosition(this.posB);
+        const m = 1.0; // 磁極の強さ（固定値）
 
         for (let i = 0; i < this.arrows.length; i++) {
           const arrow = this.arrows[i];
           const offset = this.offsets[i];
 
-          if ((offset.owner === 0 && valA === 0) || 
-              (offset.owner === 1 && valB === 0)) {
-            arrow.visible = false;
-            continue;
-          }
-
-          arrow.visible = true;
-          
-          const basePos = offset.owner === 0 ? this.posA : this.posB;
-          this.targetPos.copy(basePos).add(offset.vec);
-
+          // 矢印のワールド座標を決定
+          this.targetPos.copy(this.posCenter).add(offset);
           this.bTotal.set(0, 0, 0);
 
-          if (valA !== 0) {
-            this.bA.subVectors(this.targetPos, this.posA);
-            const distSq = this.bA.lengthSq();
-            if (distSq > 0.01) {
-              const mag = valA / distSq;
-              this.bA.normalize().multiplyScalar(mag);
-              this.bTotal.add(this.bA);
-            }
+          // N極からの磁場 (湧き出し)
+          this.bN.subVectors(this.targetPos, this.posN);
+          const distSqN = this.bN.lengthSq();
+          if (distSqN > 0.01) {
+            this.bN.normalize().multiplyScalar(m / distSqN);
+            this.bTotal.add(this.bN);
           }
 
-          if (valB !== 0) {
-            this.bB.subVectors(this.targetPos, this.posB);
-            const distSq = this.bB.lengthSq();
-            if (distSq > 0.01) {
-              const mag = valB / distSq;
-              this.bB.normalize().multiplyScalar(mag);
-              this.bTotal.add(this.bB);
-            }
+          // S極からの磁場 (吸い込み：マイナス)
+          this.bS.subVectors(this.targetPos, this.posS);
+          const distSqS = this.bS.lengthSq();
+          if (distSqS > 0.01) {
+            // S極へ向かうベクトルにするため引く
+            this.bS.normalize().multiplyScalar(m / distSqS);
+            this.bTotal.sub(this.bS);
           }
 
           const totalMag = this.bTotal.length();
@@ -158,9 +147,12 @@
             continue;
           }
 
-          const arrowLength = Math.min(totalMag * 0.5, 0.4);
-          const colorIntensity = Math.min(totalMag, 1.0);
-          this.colorObj.setHSL(0.5, 1.0, 0.2 + colorIntensity * 0.4);
+          arrow.visible = true;
+          
+          // 磁力線の強さに応じた長さと色の計算
+          const arrowLength = Math.min(totalMag * 0.3, 0.45);
+          const colorIntensity = Math.min(totalMag * 0.8, 1.0);
+          this.colorObj.setHSL(0.5, 1.0, 0.2 + colorIntensity * 0.4); // 水色系で明るさが変わる
 
           this.bTotal.normalize();
           
@@ -171,83 +163,21 @@
         }
       }
     });
-
-    // 3. UIの連動
-    document.addEventListener('DOMContentLoaded', () => {
-      const fieldEntity = document.getElementById('magnetic-field-manager');
-      
-      const updatePole = (sliderId, labelId, containerId, boxId, textId, attrName) => {
-        const slider = document.getElementById(sliderId);
-        const label = document.getElementById(labelId);
-        const box = document.getElementById(boxId);
-        const textObj = document.getElementById(textId);
-
-        slider.addEventListener('input', (e) => {
-          const val = parseFloat(e.target.value);
-          label.textContent = val.toFixed(1);
-          fieldEntity.setAttribute('magnetic-field-lines', attrName, val);
-
-          if (val > 0) {
-            box.setAttribute('color', '#FF3333');
-            textObj.setAttribute('value', 'N');
-          } else if (val < 0) {
-            box.setAttribute('color', '#3333FF');
-            textObj.setAttribute('value', 'S');
-          } else {
-            box.setAttribute('color', '#888888');
-            textObj.setAttribute('value', '');
-          }
-        });
-      };
-
-      // ★修正: 対象をsphereからboxに変更
-      updatePole('poleA-slider', 'poleA-label', 'poleA-container', 'poleA-box', 'poleA-text', 'poleAVal');
-      updatePole('poleB-slider', 'poleB-label', 'poleB-container', 'poleB-box', 'poleB-text', 'poleBVal');
-
-      const distSlider = document.getElementById('distance-slider');
-      const distLabel = document.getElementById('distance-label');
-      const containerA = document.getElementById('poleA-container');
-      const containerB = document.getElementById('poleB-container');
-
-      distSlider.addEventListener('input', (e) => {
-        const dist = parseFloat(e.target.value);
-        distLabel.textContent = dist.toFixed(1);
-        
-        containerA.setAttribute('position', `${-dist / 2} 1.0 0`);
-        containerB.setAttribute('position', `${dist / 2} 1.0 0`);
-      });
-    });
   </script>
 </head>
 <body style="margin: 0; overflow: hidden; background-color: #000;">
   
+  <!-- タイトルと説明表示（シンプル化） -->
   <div style="position: absolute; top: 10px; left: 10px; z-index: 10; pointer-events: none;">
     <div style="padding: 6px 12px; font-size: 14px; font-weight: bold; background-color: rgba(0, 0, 0, 0.7); color: white; border: 1px solid white; border-radius: 6px;">
-      磁力線の観察
+      棒磁石の磁力線
     </div>
   </div>
 
-  <div style="position: absolute; top: 50px; left: 10px; display: flex; flex-direction: column; gap: 8px; z-index: 10; width: calc(100vw - 20px); max-width: 280px;">
-    
-    <div style="display: flex; align-items: center; background: rgba(0,0,0,0.6); padding: 6px 12px; border-radius: 8px;">
-      <span style="color: white; font-weight: bold; font-size: 13px; width: 85px; white-space: nowrap;">磁極A: <span id="poleA-label">1.0</span></span>
-      <input type="range" id="poleA-slider" min="-3.0" max="3.0" step="0.1" value="1.0" style="flex-grow: 1; margin-left: 5px;">
+  <div style="position: absolute; top: 50px; left: 10px; z-index: 10; width: calc(100vw - 20px); max-width: 280px; pointer-events: none;">
+    <div style="background: rgba(0,0,0,0.4); padding: 8px 12px; border-radius: 6px;">
+      <span style="color: #ddd; font-size: 12px;">ARマーカーの上に、1本の棒磁石とそれが空間に作り出す3Dの磁力線（双極子磁場）が表示されます。スマホを様々な角度から覗き込んで観察してみましょう。</span>
     </div>
-
-    <div style="display: flex; align-items: center; background: rgba(0,0,0,0.6); padding: 6px 12px; border-radius: 8px;">
-      <span style="color: white; font-weight: bold; font-size: 13px; width: 85px; white-space: nowrap;">磁極B: <span id="poleB-label">-1.0</span></span>
-      <input type="range" id="poleB-slider" min="-3.0" max="3.0" step="0.1" value="-1.0" style="flex-grow: 1; margin-left: 5px;">
-    </div>
-
-    <div style="display: flex; align-items: center; background: rgba(255,255,255,0.25); padding: 6px 12px; border-radius: 8px;">
-      <span style="color: white; font-weight: bold; font-size: 13px; width: 85px; white-space: nowrap;">極間距離: <span id="distance-label">1.5</span></span>
-      <input type="range" id="distance-slider" min="0.5" max="3.0" step="0.1" value="1.5" style="flex-grow: 1; margin-left: 5px;">
-    </div>
-
-    <div style="background: rgba(0,0,0,0.4); padding: 6px 10px; border-radius: 6px; margin-top: 5px;">
-      <span style="color: #ddd; font-size: 11px;">※プラスはN極(赤)、マイナスはS極(青)です。棒磁石の先端から吹き出す磁力線を観察しましょう。</span>
-    </div>
-
   </div>
 
   <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false; trackingMethod: best; detectionMode: mono_and_matrix; matrixCodeType: 3x3;">
@@ -258,25 +188,27 @@
 
     <a-entity id="system-container" smooth-follower="target: #marker-0; lerpAmount: 0.15; hideDelay: 1500">
       
-      <!-- ★修正: 磁極A (左側から伸びる棒磁石) -->
-      <a-entity id="poleA-container" position="-0.75 1.0 0">
-        <!-- 棒本体を左方向(Xマイナス方向)にずらして配置 -->
-        <a-box id="poleA-box" position="-0.5 0 0" width="1.0" height="0.15" depth="0.15" color="#FF3333" opacity="0.9"></a-box>
-        <!-- 文字を先端の少し上に配置 -->
-        <a-text id="poleA-text" value="N" position="-0.1 0.15 0" align="center" color="white" scale="0.7 0.7 0.7"></a-text>
-      </a-entity>
-      
-      <!-- ★修正: 磁極B (右側から伸びる棒磁石) -->
-      <a-entity id="poleB-container" position="0.75 1.0 0">
-        <!-- 棒本体を右方向(Xプラス方向)にずらして配置 -->
-        <a-box id="poleB-box" position="0.5 0 0" width="1.0" height="0.15" depth="0.15" color="#3333FF" opacity="0.9"></a-box>
-        <!-- 文字を先端の少し上に配置 -->
-        <a-text id="poleB-text" value="S" position="0.1 0.15 0" align="center" color="white" scale="0.7 0.7 0.7"></a-text>
+      <!-- 棒磁石のモデル -->
+      <a-entity id="magnet-center" position="0 1.0 0">
+        
+        <!-- N極（右半分: Xのプラス方向） -->
+        <a-box position="0.3 0 0" width="0.6" height="0.15" depth="0.15" color="#FF3333"></a-box>
+        <a-text value="N" position="0.45 0.15 0" align="center" color="white" scale="0.6 0.6 0.6"></a-text>
+        
+        <!-- S極（左半分: Xのマイナス方向） -->
+        <a-box position="-0.3 0 0" width="0.6" height="0.15" depth="0.15" color="#3333FF"></a-box>
+        <a-text value="S" position="-0.45 0.15 0" align="center" color="white" scale="0.6 0.6 0.6"></a-text>
+
+        <!-- 磁場計算の基準点となる両極の先端（透明なEntity） -->
+        <a-entity id="pole-n" position="0.55 0 0"></a-entity>
+        <a-entity id="pole-s" position="-0.55 0 0"></a-entity>
+
       </a-entity>
 
     </a-entity>
 
-    <a-entity id="magnetic-field-manager" magnetic-field-lines="poleAVal: 1.0; poleBVal: -1.0"></a-entity>
+    <!-- 磁力線の描画マネージャー -->
+    <a-entity id="magnetic-field-manager" bar-magnet-field></a-entity>
 
   </a-scene>
 </body>
