@@ -102,29 +102,26 @@
       },
 
       tick: function () {
-        // コンテナが非表示なら矢印も計算ストップ・非表示
         if (!this.systemContainer.object3D.visible) {
           this.el.object3D.visible = false;
           return;
         }
         this.el.object3D.visible = true;
 
-        // 磁石の中心座標と、両極の座標を取得
         this.magnetCenter.object3D.getWorldPosition(this.posCenter);
         this.poleN.object3D.getWorldPosition(this.posN);
         this.poleS.object3D.getWorldPosition(this.posS);
 
-        const m = 1.0; // 磁極の強さ（固定値）
+        const m = 1.0; 
 
         for (let i = 0; i < this.arrows.length; i++) {
           const arrow = this.arrows[i];
           const offset = this.offsets[i];
 
-          // 矢印のワールド座標を決定
           this.targetPos.copy(this.posCenter).add(offset);
           this.bTotal.set(0, 0, 0);
 
-          // N極からの磁場 (湧き出し)
+          // N極からの磁場
           this.bN.subVectors(this.targetPos, this.posN);
           const distSqN = this.bN.lengthSq();
           if (distSqN > 0.01) {
@@ -132,11 +129,10 @@
             this.bTotal.add(this.bN);
           }
 
-          // S極からの磁場 (吸い込み：マイナス)
+          // S極からの磁場
           this.bS.subVectors(this.targetPos, this.posS);
           const distSqS = this.bS.lengthSq();
           if (distSqS > 0.01) {
-            // S極へ向かうベクトルにするため引く
             this.bS.normalize().multiplyScalar(m / distSqS);
             this.bTotal.sub(this.bS);
           }
@@ -149,16 +145,20 @@
 
           arrow.visible = true;
           
-          // 磁力線の強さに応じた長さと色の計算
           const arrowLength = Math.min(totalMag * 0.3, 0.45);
           const colorIntensity = Math.min(totalMag * 0.8, 1.0);
-          this.colorObj.setHSL(0.5, 1.0, 0.2 + colorIntensity * 0.4); // 水色系で明るさが変わる
+          this.colorObj.setHSL(0.5, 1.0, 0.2 + colorIntensity * 0.4); 
 
           this.bTotal.normalize();
           
           arrow.position.copy(this.targetPos);
           arrow.setDirection(this.bTotal);
-          arrow.setLength(arrowLength, arrowLength * 0.3, arrowLength * 0.3);
+          
+          // ★修正ポイント：傘の長さ(headLength)と太さ(headWidth)の倍率を0.3から大幅に縮小
+          const headLength = arrowLength * 0.18;
+          const headWidth = arrowLength * 0.12;
+          arrow.setLength(arrowLength, headLength, headWidth);
+          
           arrow.setColor(this.colorObj.getHex());
         }
       }
@@ -167,7 +167,6 @@
 </head>
 <body style="margin: 0; overflow: hidden; background-color: #000;">
   
-  <!-- タイトルと説明表示（シンプル化） -->
   <div style="position: absolute; top: 10px; left: 10px; z-index: 10; pointer-events: none;">
     <div style="padding: 6px 12px; font-size: 14px; font-weight: bold; background-color: rgba(0, 0, 0, 0.7); color: white; border: 1px solid white; border-radius: 6px;">
       棒磁石の磁力線
@@ -176,7 +175,7 @@
 
   <div style="position: absolute; top: 50px; left: 10px; z-index: 10; width: calc(100vw - 20px); max-width: 280px; pointer-events: none;">
     <div style="background: rgba(0,0,0,0.4); padding: 8px 12px; border-radius: 6px;">
-      <span style="color: #ddd; font-size: 12px;">ARマーカーの上に、1本の棒磁石とそれが空間に作り出す3Dの磁力線（双極子磁場）が表示されます。スマホを様々な角度から覗き込んで観察してみましょう。</span>
+      <span style="color: #ddd; font-size: 12px;">ARマーカーの上に、1本の棒磁石とそれが空間に作り出す3Dの磁力線が表示されます。スマホを様々な角度から覗き込んで観察してみましょう。</span>
     </div>
   </div>
 
@@ -191,15 +190,12 @@
       <!-- 棒磁石のモデル -->
       <a-entity id="magnet-center" position="0 1.0 0">
         
-        <!-- N極（右半分: Xのプラス方向） -->
         <a-box position="0.3 0 0" width="0.6" height="0.15" depth="0.15" color="#FF3333"></a-box>
         <a-text value="N" position="0.45 0.15 0" align="center" color="white" scale="0.6 0.6 0.6"></a-text>
         
-        <!-- S極（左半分: Xのマイナス方向） -->
         <a-box position="-0.3 0 0" width="0.6" height="0.15" depth="0.15" color="#3333FF"></a-box>
         <a-text value="S" position="-0.45 0.15 0" align="center" color="white" scale="0.6 0.6 0.6"></a-text>
 
-        <!-- 磁場計算の基準点となる両極の先端（透明なEntity） -->
         <a-entity id="pole-n" position="0.55 0 0"></a-entity>
         <a-entity id="pole-s" position="-0.55 0 0"></a-entity>
 
@@ -207,7 +203,6 @@
 
     </a-entity>
 
-    <!-- 磁力線の描画マネージャー -->
     <a-entity id="magnetic-field-manager" bar-magnet-field></a-entity>
 
   </a-scene>
