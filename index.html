@@ -9,7 +9,7 @@
   <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
 
   <script>
-    // 1. マーカー追従（猶予時間タイマー付き安定版）
+    // 1. マーカー追従（猶予時間タイマー付き）
     AFRAME.registerComponent('smooth-follower', {
       schema: {
         target: {type: 'selector'},
@@ -67,11 +67,11 @@
         const textBack = document.getElementById('text-back');
 
         if (B > 0) {
-          // Bが正: 手前がN極、奥がS極 (磁場は奥に向かう)
+          // Bが正: 手前がN極、奥がS極
           poleFront.setAttribute('color', '#FF3333'); textFront.setAttribute('value', 'N');
           poleBack.setAttribute('color', '#3333FF');  textBack.setAttribute('value', 'S');
         } else if (B < 0) {
-          // Bが負: 手前がS極、奥がN極 (磁場は手前に向かう)
+          // Bが負: 手前がS極、奥がN極
           poleFront.setAttribute('color', '#3333FF'); textFront.setAttribute('value', 'S');
           poleBack.setAttribute('color', '#FF3333');  textBack.setAttribute('value', 'N');
         } else {
@@ -88,7 +88,10 @@
           // Bが正なら-Z方向(奥)へ、負なら+Z方向(手前)へ回転
           const rotX = B > 0 ? -90 : 90;
           bArrows.setAttribute('rotation', `${rotX} 0 0`);
-          bArrows.setAttribute('scale', `1 ${Math.abs(B)*0.2 + 0.5} 1`);
+          
+          // ★修正: 長さは極間で固定し、磁場の強さは「太さ（XとZのスケール）」で表現
+          const thickness = Math.abs(B) * 0.4 + 0.4;
+          bArrows.setAttribute('scale', `${thickness} 1 ${thickness}`);
         }
 
         // --- 電流(I)ベクトルの更新（黄色） ---
@@ -97,7 +100,6 @@
           arrowI.setAttribute('visible', 'false');
         } else {
           arrowI.setAttribute('visible', 'true');
-          // Iが正なら+X方向(右)へ、負なら-X方向(左)へ回転
           const rotZ = I > 0 ? -90 : 90;
           arrowI.setAttribute('rotation', `0 0 ${rotZ}`);
           arrowI.setAttribute('scale', `1 ${Math.abs(I)*0.2 + 0.5} 1`);
@@ -109,10 +111,8 @@
           arrowF.setAttribute('visible', 'false');
         } else {
           arrowF.setAttribute('visible', 'true');
-          // Fが正なら+Y方向(上)へ、負なら-Y方向(下)へ回転
           const rotX = F > 0 ? 0 : 180;
           arrowF.setAttribute('rotation', `${rotX} 0 0`);
-          // 力は目立たせるために少し大きめにスケール
           arrowF.setAttribute('scale', `1 ${Math.abs(F)*0.2 + 0.5} 1`);
         }
       }
@@ -144,29 +144,24 @@
 </head>
 <body style="margin: 0; overflow: hidden; background-color: #000;">
   
-  <!-- タイトル表示 -->
   <div style="position: absolute; top: 10px; left: 10px; z-index: 10; pointer-events: none;">
     <div style="padding: 6px 12px; font-size: 14px; font-weight: bold; background-color: rgba(0, 0, 0, 0.7); color: white; border: 1px solid white; border-radius: 6px;">
       フレミングの左手の法則
     </div>
   </div>
 
-  <!-- スライダーUI -->
   <div style="position: absolute; top: 50px; left: 10px; display: flex; flex-direction: column; gap: 8px; z-index: 10; width: calc(100vw - 20px); max-width: 280px;">
     
-    <!-- 電流スライダー -->
     <div style="display: flex; align-items: center; background: rgba(0,0,0,0.6); padding: 6px 12px; border-radius: 8px;">
       <span style="color: yellow; font-weight: bold; font-size: 13px; width: 85px; white-space: nowrap;">電流(I): <span id="current-label">1.0</span></span>
       <input type="range" id="current-slider" min="-3.0" max="3.0" step="0.1" value="1.0" style="flex-grow: 1; margin-left: 5px;">
     </div>
 
-    <!-- 磁場スライダー -->
     <div style="display: flex; align-items: center; background: rgba(0,0,0,0.6); padding: 6px 12px; border-radius: 8px;">
       <span style="color: #00FFFF; font-weight: bold; font-size: 13px; width: 85px; white-space: nowrap;">磁場(B): <span id="bfield-label">1.0</span></span>
       <input type="range" id="bfield-slider" min="-3.0" max="3.0" step="0.1" value="1.0" style="flex-grow: 1; margin-left: 5px;">
     </div>
 
-    <!-- 説明テキスト -->
     <div style="background: rgba(0,0,0,0.4); padding: 6px 10px; border-radius: 6px; margin-top: 5px;">
       <span style="color: #ddd; font-size: 11px;">※左手を出して、中指(黄)、人差し指(水色)、親指(緑)の向きが一致するか確認しましょう。</span>
     </div>
@@ -179,47 +174,41 @@
 
     <a-entity camera></a-entity>
 
-    <!-- AR空間のルートコンテナ -->
     <a-entity id="system-container" smooth-follower="target: #marker-0; lerpAmount: 0.15; hideDelay: 1500">
       
-      <!-- 導線 (X軸方向) -->
       <a-cylinder position="0 1.0 0" radius="0.05" height="2.5" rotation="0 0 90" color="#CCCCCC" opacity="0.8"></a-cylinder>
 
-      <!-- 磁石：手前極 (Z=+0.6) -->
       <a-box id="pole-front" position="0 1.0 0.6" width="0.8" height="0.4" depth="0.2" color="#FF3333" opacity="0.9">
         <a-text id="text-front" value="N" position="0 0.25 0" align="center" color="white" scale="0.8 0.8 0.8" rotation="-90 0 0"></a-text>
       </a-box>
 
-      <!-- 磁石：奥極 (Z=-0.6) -->
       <a-box id="pole-back" position="0 1.0 -0.6" width="0.8" height="0.4" depth="0.2" color="#3333FF" opacity="0.9">
         <a-text id="text-back" value="S" position="0 0.25 0" align="center" color="white" scale="0.8 0.8 0.8" rotation="-90 0 0"></a-text>
       </a-box>
 
-      <!-- ベクトル描画マネージャー -->
       <a-entity id="lorentz-manager" lorentz-system="currentVal: 1.0; bFieldVal: 1.0" position="0 1.0 0">
         
-        <!-- 磁場(B)ベクトル（水色・2本並べる） -->
+        <!-- ★修正: 磁場の矢印をN極の表面からS極の表面まで貫通するようにジオメトリを変更 -->
         <a-entity id="arrow-B-group" position="0 0 0">
           <a-entity position="-0.3 0 0">
-            <a-cylinder position="0 0.3 0" radius="0.02" height="0.6" color="#00FFFF" opacity="0.7"></a-cylinder>
-            <a-cone position="0 0.7 0" radius-bottom="0.08" height="0.2" color="#00FFFF" opacity="0.7"></a-cone>
+            <a-cylinder position="0 -0.1 0" radius="0.02" height="0.7" color="#00FFFF" opacity="0.7"></a-cylinder>
+            <a-cone position="0 0.35 0" radius-bottom="0.08" height="0.2" color="#00FFFF" opacity="0.7"></a-cone>
           </a-entity>
           <a-entity position="0.3 0 0">
-            <a-cylinder position="0 0.3 0" radius="0.02" height="0.6" color="#00FFFF" opacity="0.7"></a-cylinder>
-            <a-cone position="0 0.7 0" radius-bottom="0.08" height="0.2" color="#00FFFF" opacity="0.7"></a-cone>
+            <a-cylinder position="0 -0.1 0" radius="0.02" height="0.7" color="#00FFFF" opacity="0.7"></a-cylinder>
+            <a-cone position="0 0.35 0" radius-bottom="0.08" height="0.2" color="#00FFFF" opacity="0.7"></a-cone>
           </a-entity>
         </a-entity>
 
-        <!-- 電流(I)ベクトル（黄色） -->
+        <!-- 電流(I)ベクトル -->
         <a-entity id="arrow-I" position="0 0 0">
-          <!-- 導線と被らないように少し手前上部にオフセット -->
           <a-entity position="0 0.15 0.15">
             <a-cylinder position="0 0.5 0" radius="0.03" height="1.0" color="#FFFF00"></a-cylinder>
             <a-cone position="0 1.1 0" radius-bottom="0.1" height="0.25" color="#FFFF00"></a-cone>
           </a-entity>
         </a-entity>
 
-        <!-- 力(F)ベクトル（緑色・一番太く目立たせる） -->
+        <!-- 力(F)ベクトル -->
         <a-entity id="arrow-F" position="0 0 0">
           <a-cylinder position="0 0.5 0" radius="0.04" height="1.0" color="#00FF00"></a-cylinder>
           <a-cone position="0 1.1 0" radius-bottom="0.12" height="0.3" color="#00FF00"></a-cone>
