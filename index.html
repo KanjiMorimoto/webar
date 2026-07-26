@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>AR物理実験室 - フレミングの左手の法則</title>
+  <title>AR物理実験室 - 電磁誘導とレンツの法則</title>
   
   <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
   <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
 
   <script>
-    // 1. マーカー追従（猶予時間タイマー付き）
+    // 1. マーカー追従（猶予時間タイマー付き安定版）
     AFRAME.registerComponent('smooth-follower', {
       schema: {
         target: {type: 'selector'},
@@ -48,96 +48,125 @@
       }
     });
 
-    // 2. ローレンツ力（フレミングの左手）計算・描画コンポーネント
-    AFRAME.registerComponent('lorentz-system', {
+    // 2. レンツの法則の計算・描画コンポーネント
+    AFRAME.registerComponent('lenz-system', {
       schema: {
-        currentVal: {type: 'number', default: 1.0},
-        bFieldVal: {type: 'number', default: 1.0}
+        height: {type: 'number', default: 2.0},
+        pole: {type: 'number', default: 1} // 1: N極が下, -1: S極が下
       },
-      tick: function () {
-        const I = this.data.currentVal;
-        const B = this.data.bFieldVal;
-        // 力 F = I × B に比例
-        const F = I * B;
+      init: function () {
+        this.prevHeight = this.data.height;
+        this.smoothedVelocity = 0;
+        this.visualB = 0; // 描画用の滑らかな値
+        
+        // 描画要素の取得
+        this.magnetEntity = document.getElementById('magnet-entity');
+        this.magnetBottom = document.getElementById('magnet-bottom');
+        this.magnetTop = document.getElementById('magnet-top');
+        this.magnetBottomText = document.getElementById('magnet-bottom-text');
+        this.magnetTopText = document.getElementById('magnet-top-text');
+        
+        this.inducedBArrow = document.getElementById('induced-b-arrow');
+        this.coilArrowsCCW = document.getElementById('coil-arrows-ccw'); // 反時計回り
+        this.coilArrowsCW = document.getElementById('coil-arrows-cw');   // 時計回り
+      },
+      tick: function (time, timeDelta) {
+        if (timeDelta === 0) return;
 
-        // --- 磁石の極（N/S）の更新 ---
-        const poleFront = document.getElementById('pole-front');
-        const poleBack = document.getElementById('pole-back');
-        const textFront = document.getElementById('text-front');
-        const textBack = document.getElementById('text-back');
+        // --- 磁石の物理的な位置と極性の更新 ---
+        this.magnetEntity.object3D.position.y = this.data.height;
 
-        if (B > 0) {
-          // Bが正: 手前がN極、奥がS極
-          poleFront.setAttribute('color', '#FF3333'); textFront.setAttribute('value', 'N');
-          poleBack.setAttribute('color', '#3333FF');  textBack.setAttribute('value', 'S');
-        } else if (B < 0) {
-          // Bが負: 手前がS極、奥がN極
-          poleFront.setAttribute('color', '#3333FF'); textFront.setAttribute('value', 'S');
-          poleBack.setAttribute('color', '#FF3333');  textBack.setAttribute('value', 'N');
-        } else {
-          poleFront.setAttribute('color', '#888888'); textFront.setAttribute('value', '');
-          poleBack.setAttribute('color', '#888888');  textBack.setAttribute('value', '');
+        if (this.data.pole === 1) { // N極が下
+          this.magnetBottom.setAttribute('color', '#FF3333');
+          this.magnetBottomText.setAttribute('value', 'N');
+          this.magnetTop.setAttribute('color', '#3333FF');
+          this.magnetTopText.setAttribute('value', 'S');
+        } else { // S極が下
+          this.magnetBottom.setAttribute('color', '#3333FF');
+          this.magnetBottomText.setAttribute('value', 'S');
+          this.magnetTop.setAttribute('color', '#FF3333');
+          this.magnetTopText.setAttribute('value', 'N');
         }
 
-        // --- 磁場(B)ベクトルの更新（水色） ---
-        const bArrows = document.getElementById('arrow-B-group');
-        if (B === 0) {
-          bArrows.setAttribute('visible', 'false');
+        // --- 速度(v)の計算 ---
+        const dt = timeDelta / 1000.0; // 秒単位
+        const v = (this.data.height - this.prevHeight) / dt;
+        this.prevHeight = this.data.height;
+
+        // スマホのスワイプによるノイズを減らすため速度を平滑化
+        this.smoothedVelocity = this.smoothedVelocity * 0.7 + v * 0.3;
+
+        // --- 誘導起電力(誘導磁場)の計算 ---
+        // 磁束(Φ) ∝ 極性(pole) / 距離(y)^2
+        // 誘導磁場(B') ∝ - dΦ/dt ∝ - pole * 速度(v) / 距離(y)^2
+        const y = Math.max(this.data.height, 0.4); // ゼロ除算防止
+        const rawInducedB = -1 * this.data.pole * this.smoothedVelocity / (y * y);
+
+        // 止まった時にふんわりと消える残像効果(UIUX向上)
+        this.visualB = this.visualB * 0.85 + rawInducedB * 0.15;
+
+        // --- 描画の更新 ---
+        if (Math.abs(this.visualB) < 0.05) {
+          // 変化がない(止まっている)場合はすべて非表示
+          this.inducedBArrow.setAttribute('visible', 'false');
+          this.coilArrowsCCW.setAttribute('visible', 'false');
+          this.coilArrowsCW.setAttribute('visible', 'false');
         } else {
-          bArrows.setAttribute('visible', 'true');
-          // Bが正なら-Z方向(奥)へ、負なら+Z方向(手前)へ回転
-          const rotX = B > 0 ? -90 : 90;
-          bArrows.setAttribute('rotation', `${rotX} 0 0`);
+          // 変化がある場合は表示
+          this.inducedBArrow.setAttribute('visible', 'true');
           
-          // ★修正: 長さは極間で固定し、磁場の強さは「太さ（XとZのスケール）」で表現
-          const thickness = Math.abs(B) * 0.4 + 0.4;
-          bArrows.setAttribute('scale', `${thickness} 1 ${thickness}`);
-        }
+          const dir = this.visualB > 0 ? 1 : -1; // 1:上向き, -1:下向き
+          const rotX = dir > 0 ? 0 : 180;
+          this.inducedBArrow.setAttribute('rotation', `${rotX} 0 0`);
+          
+          // 大きさに応じて矢印をスケール (太さと長さ)
+          const mag = Math.min(Math.abs(this.visualB) * 1.5, 2.0); 
+          this.inducedBArrow.setAttribute('scale', `${mag} ${mag} ${mag}`);
 
-        // --- 電流(I)ベクトルの更新（黄色） ---
-        const arrowI = document.getElementById('arrow-I');
-        if (I === 0) {
-          arrowI.setAttribute('visible', 'false');
-        } else {
-          arrowI.setAttribute('visible', 'true');
-          const rotZ = I > 0 ? -90 : 90;
-          arrowI.setAttribute('rotation', `0 0 ${rotZ}`);
-          arrowI.setAttribute('scale', `1 ${Math.abs(I)*0.2 + 0.5} 1`);
-        }
-
-        // --- 力(F)ベクトルの更新（緑色） ---
-        const arrowF = document.getElementById('arrow-F');
-        if (F === 0) {
-          arrowF.setAttribute('visible', 'false');
-        } else {
-          arrowF.setAttribute('visible', 'true');
-          const rotX = F > 0 ? 0 : 180;
-          arrowF.setAttribute('rotation', `${rotX} 0 0`);
-          arrowF.setAttribute('scale', `1 ${Math.abs(F)*0.2 + 0.5} 1`);
+          // 右ねじの法則に基づくコイル電流の向き
+          // 誘導磁場が上向き(dir>0)なら反時計回り(CCW)、下向きなら時計回り(CW)
+          if (dir > 0) {
+            this.coilArrowsCCW.setAttribute('visible', 'true');
+            this.coilArrowsCW.setAttribute('visible', 'false');
+            this.coilArrowsCCW.setAttribute('scale', `${mag} ${mag} ${mag}`);
+          } else {
+            this.coilArrowsCCW.setAttribute('visible', 'false');
+            this.coilArrowsCW.setAttribute('visible', 'true');
+            this.coilArrowsCW.setAttribute('scale', `${mag} ${mag} ${mag}`);
+          }
         }
       }
     });
 
     // 3. UIの連動
     document.addEventListener('DOMContentLoaded', () => {
-      const systemEntity = document.getElementById('lorentz-manager');
+      const systemEntity = document.getElementById('lenz-manager');
       
-      const currentSlider = document.getElementById('current-slider');
-      const currentLabel = document.getElementById('current-label');
+      const heightSlider = document.getElementById('height-slider');
       
-      const bfieldSlider = document.getElementById('bfield-slider');
-      const bfieldLabel = document.getElementById('bfield-label');
-
-      currentSlider.addEventListener('input', (e) => {
+      heightSlider.addEventListener('input', (e) => {
         const val = parseFloat(e.target.value);
-        currentLabel.textContent = val.toFixed(1);
-        systemEntity.setAttribute('lorentz-system', 'currentVal', val);
+        systemEntity.setAttribute('lenz-system', 'height', val);
       });
 
-      bfieldSlider.addEventListener('input', (e) => {
-        const val = parseFloat(e.target.value);
-        bfieldLabel.textContent = val.toFixed(1);
-        systemEntity.setAttribute('lorentz-system', 'bFieldVal', val);
+      const poleBtn = document.getElementById('pole-btn');
+      let currentPole = 1; // 初期値はN極が下
+
+      poleBtn.addEventListener('click', () => {
+        currentPole *= -1;
+        systemEntity.setAttribute('lenz-system', 'pole', currentPole);
+        
+        if(currentPole === 1) {
+          poleBtn.textContent = '極性を反転（現在：N極が下）';
+          poleBtn.style.backgroundColor = 'rgba(255, 51, 51, 0.7)'; // 赤系
+        } else {
+          poleBtn.textContent = '極性を反転（現在：S極が下）';
+          poleBtn.style.backgroundColor = 'rgba(51, 51, 255, 0.7)'; // 青系
+        }
+        
+        // 極性切り替え時の計算スパイクをリセット
+        systemEntity.components['lenz-system'].smoothedVelocity = 0;
+        systemEntity.components['lenz-system'].visualB = 0;
       });
     });
   </script>
@@ -146,24 +175,27 @@
   
   <div style="position: absolute; top: 10px; left: 10px; z-index: 10; pointer-events: none;">
     <div style="padding: 6px 12px; font-size: 14px; font-weight: bold; background-color: rgba(0, 0, 0, 0.7); color: white; border: 1px solid white; border-radius: 6px;">
-      フレミングの左手の法則
+      電磁誘導とレンツの法則
     </div>
   </div>
 
-  <div style="position: absolute; top: 50px; left: 10px; display: flex; flex-direction: column; gap: 8px; z-index: 10; width: calc(100vw - 20px); max-width: 280px;">
+  <!-- 操作UI -->
+  <div style="position: absolute; top: 50px; left: 10px; display: flex; flex-direction: column; gap: 12px; z-index: 10; width: calc(100vw - 20px); max-width: 280px;">
     
-    <div style="display: flex; align-items: center; background: rgba(0,0,0,0.6); padding: 6px 12px; border-radius: 8px;">
-      <span style="color: yellow; font-weight: bold; font-size: 13px; width: 85px; white-space: nowrap;">電流(I): <span id="current-label">1.0</span></span>
-      <input type="range" id="current-slider" min="-3.0" max="3.0" step="0.1" value="1.0" style="flex-grow: 1; margin-left: 5px;">
+    <!-- 磁石の高さスライダー -->
+    <div style="display: flex; align-items: center; background: rgba(0,0,0,0.6); padding: 8px 12px; border-radius: 8px;">
+      <span style="color: white; font-weight: bold; font-size: 13px; width: 70px; white-space: nowrap;">磁石を動かす</span>
+      <input type="range" id="height-slider" min="0.4" max="3.0" step="0.05" value="2.0" style="flex-grow: 1; margin-left: 5px;">
     </div>
 
-    <div style="display: flex; align-items: center; background: rgba(0,0,0,0.6); padding: 6px 12px; border-radius: 8px;">
-      <span style="color: #00FFFF; font-weight: bold; font-size: 13px; width: 85px; white-space: nowrap;">磁場(B): <span id="bfield-label">1.0</span></span>
-      <input type="range" id="bfield-slider" min="-3.0" max="3.0" step="0.1" value="1.0" style="flex-grow: 1; margin-left: 5px;">
-    </div>
+    <!-- 極性トグルボタン -->
+    <button id="pole-btn" style="padding: 8px 12px; font-size: 13px; font-weight: bold; color: white; background-color: rgba(255, 51, 51, 0.7); border: 1px solid white; border-radius: 8px; cursor: pointer; text-align: center;">
+      極性を反転（現在：N極が下）
+    </button>
 
-    <div style="background: rgba(0,0,0,0.4); padding: 6px 10px; border-radius: 6px; margin-top: 5px;">
-      <span style="color: #ddd; font-size: 11px;">※左手を出して、中指(黄)、人差し指(水色)、親指(緑)の向きが一致するか確認しましょう。</span>
+    <!-- 説明テキスト -->
+    <div style="background: rgba(0,0,0,0.4); padding: 6px 10px; border-radius: 6px;">
+      <span style="color: #ddd; font-size: 11px;">※スライダーを素早く動かして磁石をコイルに近づけたり遠ざけたりすると、変化を妨げる向きに電流(黄)が発生します。</span>
     </div>
 
   </div>
@@ -174,44 +206,51 @@
 
     <a-entity camera></a-entity>
 
+    <!-- AR空間のルートコンテナ -->
     <a-entity id="system-container" smooth-follower="target: #marker-0; lerpAmount: 0.15; hideDelay: 1500">
       
-      <a-cylinder position="0 1.0 0" radius="0.05" height="2.5" rotation="0 0 90" color="#CCCCCC" opacity="0.8"></a-cylinder>
+      <!-- コイル (銅線風のリングを3段重ねる) -->
+      <a-entity position="0 0.2 0">
+        <a-torus position="0 -0.06 0" radius="0.5" tube="0.04" color="#B87333" roughness="0.6" metalness="0.5"></a-torus>
+        <a-torus position="0 0 0" radius="0.5" tube="0.04" color="#B87333" roughness="0.6" metalness="0.5"></a-torus>
+        <a-torus position="0 0.06 0" radius="0.5" tube="0.04" color="#B87333" roughness="0.6" metalness="0.5"></a-torus>
+      </a-entity>
 
-      <a-box id="pole-front" position="0 1.0 0.6" width="0.8" height="0.4" depth="0.2" color="#FF3333" opacity="0.9">
-        <a-text id="text-front" value="N" position="0 0.25 0" align="center" color="white" scale="0.8 0.8 0.8" rotation="-90 0 0"></a-text>
-      </a-box>
-
-      <a-box id="pole-back" position="0 1.0 -0.6" width="0.8" height="0.4" depth="0.2" color="#3333FF" opacity="0.9">
-        <a-text id="text-back" value="S" position="0 0.25 0" align="center" color="white" scale="0.8 0.8 0.8" rotation="-90 0 0"></a-text>
-      </a-box>
-
-      <a-entity id="lorentz-manager" lorentz-system="currentVal: 1.0; bFieldVal: 1.0" position="0 1.0 0">
+      <!-- レンツの法則 描画マネージャー -->
+      <a-entity id="lenz-manager" lenz-system="height: 2.0; pole: 1">
         
-        <!-- ★修正: 磁場の矢印をN極の表面からS極の表面まで貫通するようにジオメトリを変更 -->
-        <a-entity id="arrow-B-group" position="0 0 0">
-          <a-entity position="-0.3 0 0">
-            <a-cylinder position="0 -0.1 0" radius="0.02" height="0.7" color="#00FFFF" opacity="0.7"></a-cylinder>
-            <a-cone position="0 0.35 0" radius-bottom="0.08" height="0.2" color="#00FFFF" opacity="0.7"></a-cone>
-          </a-entity>
-          <a-entity position="0.3 0 0">
-            <a-cylinder position="0 -0.1 0" radius="0.02" height="0.7" color="#00FFFF" opacity="0.7"></a-cylinder>
-            <a-cone position="0 0.35 0" radius-bottom="0.08" height="0.2" color="#00FFFF" opacity="0.7"></a-cone>
-          </a-entity>
+        <!-- 動く磁石 -->
+        <a-entity id="magnet-entity" position="0 2.0 0">
+          <a-box id="magnet-top" position="0 0.4 0" width="0.4" height="0.8" depth="0.4" color="#3333FF">
+            <a-text id="magnet-top-text" value="S" position="0 0 0.21" align="center" color="white" scale="1.5 1.5 1.5"></a-text>
+          </a-box>
+          <a-box id="magnet-bottom" position="0 -0.4 0" width="0.4" height="0.8" depth="0.4" color="#FF3333">
+            <a-text id="magnet-bottom-text" value="N" position="0 0 0.21" align="center" color="white" scale="1.5 1.5 1.5"></a-text>
+          </a-box>
         </a-entity>
 
-        <!-- 電流(I)ベクトル -->
-        <a-entity id="arrow-I" position="0 0 0">
-          <a-entity position="0 0.15 0.15">
-            <a-cylinder position="0 0.5 0" radius="0.03" height="1.0" color="#FFFF00"></a-cylinder>
-            <a-cone position="0 1.1 0" radius-bottom="0.1" height="0.25" color="#FFFF00"></a-cone>
-          </a-entity>
+        <!-- 誘導磁場ベクトル (水色) -->
+        <a-entity id="induced-b-arrow" position="0 0.2 0" visible="false">
+          <a-cylinder position="0 0.4 0" radius="0.05" height="0.8" color="#00FFFF" opacity="0.8"></a-cylinder>
+          <a-cone position="0 0.9 0" radius-bottom="0.15" height="0.3" color="#00FFFF" opacity="0.8"></a-cone>
         </a-entity>
 
-        <!-- 力(F)ベクトル -->
-        <a-entity id="arrow-F" position="0 0 0">
-          <a-cylinder position="0 0.5 0" radius="0.04" height="1.0" color="#00FF00"></a-cylinder>
-          <a-cone position="0 1.1 0" radius-bottom="0.12" height="0.3" color="#00FF00"></a-cone>
+        <!-- 誘導電流ベクトル (反時計回り：CCW) -->
+        <!-- 上から見下ろしたとき(Y軸正方向から)に反時計回りになるように配置 -->
+        <a-entity id="coil-arrows-ccw" position="0 0.2 0" visible="false">
+          <a-cone position="0.5 0 0" rotation="-90 0 0" radius-bottom="0.08" height="0.25" color="#FFFF00"></a-cone>
+          <a-cone position="-0.5 0 0" rotation="90 0 0" radius-bottom="0.08" height="0.25" color="#FFFF00"></a-cone>
+          <a-cone position="0 0 0.5" rotation="0 0 -90" radius-bottom="0.08" height="0.25" color="#FFFF00"></a-cone>
+          <a-cone position="0 0 -0.5" rotation="0 0 90" radius-bottom="0.08" height="0.25" color="#FFFF00"></a-cone>
+        </a-entity>
+
+        <!-- 誘導電流ベクトル (時計回り：CW) -->
+        <!-- 上から見下ろしたときに時計回りになるように配置 -->
+        <a-entity id="coil-arrows-cw" position="0 0.2 0" visible="false">
+          <a-cone position="0.5 0 0" rotation="90 0 0" radius-bottom="0.08" height="0.25" color="#FFFF00"></a-cone>
+          <a-cone position="-0.5 0 0" rotation="-90 0 0" radius-bottom="0.08" height="0.25" color="#FFFF00"></a-cone>
+          <a-cone position="0 0 0.5" rotation="0 0 90" radius-bottom="0.08" height="0.25" color="#FFFF00"></a-cone>
+          <a-cone position="0 0 -0.5" rotation="0 0 -90" radius-bottom="0.08" height="0.25" color="#FFFF00"></a-cone>
         </a-entity>
 
       </a-entity>
