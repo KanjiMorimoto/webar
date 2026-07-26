@@ -58,8 +58,9 @@
         this.arrows = [];
         this.offsets = []; 
         
-        this.poleASphere = document.getElementById('poleA-sphere');
-        this.poleBSphere = document.getElementById('poleB-sphere');
+        // ★修正: 球体ではなく、棒磁石の先端(コンテナの原点)を計算の基準にする
+        this.poleAContainer = document.getElementById('poleA-container');
+        this.poleBContainer = document.getElementById('poleB-container');
         this.systemContainer = document.getElementById('system-container');
 
         this.posA = new THREE.Vector3();
@@ -101,7 +102,6 @@
       },
 
       tick: function () {
-        // コンテナが非表示なら矢印も計算ストップ・非表示
         if (!this.systemContainer.object3D.visible) {
           this.el.object3D.visible = false;
           return;
@@ -111,14 +111,14 @@
         const valA = this.data.poleAVal;
         const valB = this.data.poleBVal;
 
-        this.poleASphere.object3D.getWorldPosition(this.posA);
-        this.poleBSphere.object3D.getWorldPosition(this.posB);
+        // 棒磁石の「先端（コンテナの原点）」の座標を取得
+        this.poleAContainer.object3D.getWorldPosition(this.posA);
+        this.poleBContainer.object3D.getWorldPosition(this.posB);
 
         for (let i = 0; i < this.arrows.length; i++) {
           const arrow = this.arrows[i];
           const offset = this.offsets[i];
 
-          // 所属する磁極の強さが0なら非表示
           if ((offset.owner === 0 && valA === 0) || 
               (offset.owner === 1 && valB === 0)) {
             arrow.visible = false;
@@ -132,7 +132,6 @@
 
           this.bTotal.set(0, 0, 0);
 
-          // 磁極Aからの磁場
           if (valA !== 0) {
             this.bA.subVectors(this.targetPos, this.posA);
             const distSq = this.bA.lengthSq();
@@ -143,7 +142,6 @@
             }
           }
 
-          // 磁極Bからの磁場
           if (valB !== 0) {
             this.bB.subVectors(this.targetPos, this.posB);
             const distSq = this.bB.lengthSq();
@@ -161,8 +159,6 @@
           }
 
           const arrowLength = Math.min(totalMag * 0.5, 0.4);
-          
-          // 磁力線は水色系(Cyanベース)で表現。強いほど明るい。
           const colorIntensity = Math.min(totalMag, 1.0);
           this.colorObj.setHSL(0.5, 1.0, 0.2 + colorIntensity * 0.4);
 
@@ -180,10 +176,10 @@
     document.addEventListener('DOMContentLoaded', () => {
       const fieldEntity = document.getElementById('magnetic-field-manager');
       
-      const updatePole = (sliderId, labelId, sphereId, textId, attrName) => {
+      const updatePole = (sliderId, labelId, containerId, boxId, textId, attrName) => {
         const slider = document.getElementById(sliderId);
         const label = document.getElementById(labelId);
-        const sphere = document.getElementById(sphereId);
+        const box = document.getElementById(boxId);
         const textObj = document.getElementById(textId);
 
         slider.addEventListener('input', (e) => {
@@ -191,34 +187,34 @@
           label.textContent = val.toFixed(1);
           fieldEntity.setAttribute('magnetic-field-lines', attrName, val);
 
-          // 正ならN極(赤)、負ならS極(青)、0なら無極(グレー)
           if (val > 0) {
-            sphere.setAttribute('color', '#FF3333');
+            box.setAttribute('color', '#FF3333');
             textObj.setAttribute('value', 'N');
           } else if (val < 0) {
-            sphere.setAttribute('color', '#3333FF');
+            box.setAttribute('color', '#3333FF');
             textObj.setAttribute('value', 'S');
           } else {
-            sphere.setAttribute('color', '#888888');
+            box.setAttribute('color', '#888888');
             textObj.setAttribute('value', '');
           }
         });
       };
 
-      updatePole('poleA-slider', 'poleA-label', 'poleA-sphere', 'poleA-text', 'poleAVal');
-      updatePole('poleB-slider', 'poleB-label', 'poleB-sphere', 'poleB-text', 'poleBVal');
+      // ★修正: 対象をsphereからboxに変更
+      updatePole('poleA-slider', 'poleA-label', 'poleA-container', 'poleA-box', 'poleA-text', 'poleAVal');
+      updatePole('poleB-slider', 'poleB-label', 'poleB-container', 'poleB-box', 'poleB-text', 'poleBVal');
 
       const distSlider = document.getElementById('distance-slider');
       const distLabel = document.getElementById('distance-label');
-      const sphereA = document.getElementById('poleA-sphere');
-      const sphereB = document.getElementById('poleB-sphere');
+      const containerA = document.getElementById('poleA-container');
+      const containerB = document.getElementById('poleB-container');
 
       distSlider.addEventListener('input', (e) => {
         const dist = parseFloat(e.target.value);
         distLabel.textContent = dist.toFixed(1);
         
-        sphereA.setAttribute('position', `${-dist / 2} 1.0 0`);
-        sphereB.setAttribute('position', `${dist / 2} 1.0 0`);
+        containerA.setAttribute('position', `${-dist / 2} 1.0 0`);
+        containerB.setAttribute('position', `${dist / 2} 1.0 0`);
       });
     });
   </script>
@@ -249,7 +245,7 @@
     </div>
 
     <div style="background: rgba(0,0,0,0.4); padding: 6px 10px; border-radius: 6px; margin-top: 5px;">
-      <span style="color: #ddd; font-size: 11px;">※プラスはN極(赤)、マイナスはS極(青)として、長い棒磁石の先端が作る磁場をモデル化しています。</span>
+      <span style="color: #ddd; font-size: 11px;">※プラスはN極(赤)、マイナスはS極(青)です。棒磁石の先端から吹き出す磁力線を観察しましょう。</span>
     </div>
 
   </div>
@@ -262,19 +258,24 @@
 
     <a-entity id="system-container" smooth-follower="target: #marker-0; lerpAmount: 0.15; hideDelay: 1500">
       
-      <!-- 磁極A (初期値: +1.0 = N極) -->
-      <a-sphere id="poleA-sphere" position="-0.75 1.0 0" radius="0.1" color="#FF3333" opacity="0.9">
-        <a-text id="poleA-text" value="N" position="0 0.15 0" align="center" color="white" scale="0.6 0.6 0.6"></a-text>
-      </a-sphere>
+      <!-- ★修正: 磁極A (左側から伸びる棒磁石) -->
+      <a-entity id="poleA-container" position="-0.75 1.0 0">
+        <!-- 棒本体を左方向(Xマイナス方向)にずらして配置 -->
+        <a-box id="poleA-box" position="-0.5 0 0" width="1.0" height="0.15" depth="0.15" color="#FF3333" opacity="0.9"></a-box>
+        <!-- 文字を先端の少し上に配置 -->
+        <a-text id="poleA-text" value="N" position="-0.1 0.15 0" align="center" color="white" scale="0.7 0.7 0.7"></a-text>
+      </a-entity>
       
-      <!-- 磁極B (初期値: -1.0 = S極) -->
-      <a-sphere id="poleB-sphere" position="0.75 1.0 0" radius="0.1" color="#3333FF" opacity="0.9">
-        <a-text id="poleB-text" value="S" position="0 0.15 0" align="center" color="white" scale="0.6 0.6 0.6"></a-text>
-      </a-sphere>
+      <!-- ★修正: 磁極B (右側から伸びる棒磁石) -->
+      <a-entity id="poleB-container" position="0.75 1.0 0">
+        <!-- 棒本体を右方向(Xプラス方向)にずらして配置 -->
+        <a-box id="poleB-box" position="0.5 0 0" width="1.0" height="0.15" depth="0.15" color="#3333FF" opacity="0.9"></a-box>
+        <!-- 文字を先端の少し上に配置 -->
+        <a-text id="poleB-text" value="S" position="0.1 0.15 0" align="center" color="white" scale="0.7 0.7 0.7"></a-text>
+      </a-entity>
 
     </a-entity>
 
-    <!-- 磁力線の描画マネージャー -->
     <a-entity id="magnetic-field-manager" magnetic-field-lines="poleAVal: 1.0; poleBVal: -1.0"></a-entity>
 
   </a-scene>
